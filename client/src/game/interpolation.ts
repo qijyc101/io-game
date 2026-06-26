@@ -1,7 +1,4 @@
-import { TICK_MS } from "@io-game/shared";
-
-export const INTERP_MS = TICK_MS;
-export const EXTRAP_MS = TICK_MS * 2;
+import { INTERP_MS, EXTRAP_MS } from "@io-game/shared";
 
 export function smoothstep(t: number): number {
   const x = Math.max(0, Math.min(1, t));

@@ -1,4 +1,4 @@
-import { PLAYER_RADIUS, BULLET_RADIUS } from "@io-game/shared";
+import { PLAYER_RADIUS } from "@io-game/shared";
 import { OBSTACLES } from "@io-game/shared";
 import type { ObstacleDef } from "@io-game/shared";
 
@@ -20,10 +20,11 @@ export function circleCollision(
 export function bulletHitsPlayer(
   bx: number,
   by: number,
+  bulletRadius: number,
   px: number,
   py: number,
 ): boolean {
-  return circleCollision(bx, by, BULLET_RADIUS, px, py, PLAYER_RADIUS);
+  return circleCollision(bx, by, bulletRadius, px, py, PLAYER_RADIUS);
 }
 
 export function circleOverlapsRect(
@@ -53,6 +54,6 @@ export function circleOverlapsObstacles(
   );
 }
 
-export function bulletHitsObstacle(bx: number, by: number): boolean {
-  return circleOverlapsObstacles(bx, by, BULLET_RADIUS);
+export function bulletHitsObstacle(bx: number, by: number, bulletRadius: number): boolean {
+  return circleOverlapsObstacles(bx, by, bulletRadius);
 }

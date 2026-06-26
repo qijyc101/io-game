@@ -3,6 +3,7 @@ import { createPixiApp, GameRenderer } from "./renderer";
 import { initInput } from "./input";
 import type { GameSocket } from "../network/socket";
 import type { StateMessage } from "@io-game/shared";
+import { MAX_FRAME_DT } from "@io-game/shared";
 
 interface GameCanvasProps {
   socket: GameSocket;
@@ -33,6 +34,7 @@ export function GameCanvas({ socket, playerId, gameState }: GameCanvasProps) {
     const init = async () => {
       gameApp = await createPixiApp(container);
       if (destroyed) {
+        gameApp.destroyLayout();
         gameApp.app.destroy(true);
         gameApp.fogCanvas.remove();
         return;
@@ -50,7 +52,7 @@ export function GameCanvas({ socket, playerId, gameState }: GameCanvasProps) {
       const loop = (frameTime: number) => {
         if (destroyed || !renderer || !getInput) return;
 
-        const dt = Math.min((frameTime - lastFrameTime) / 1000, 0.05);
+        const dt = Math.min((frameTime - lastFrameTime) / 1000, MAX_FRAME_DT);
         lastFrameTime = frameTime;
 
         const input = getInput();
@@ -70,6 +72,7 @@ export function GameCanvas({ socket, playerId, gameState }: GameCanvasProps) {
       unsubscribeState();
       cancelAnimationFrame(rafId);
       renderer?.destroy();
+      gameApp?.destroyLayout();
       gameApp?.app.destroy(true, { children: true });
       gameApp?.fogCanvas.remove();
     };
@@ -78,7 +81,7 @@ export function GameCanvas({ socket, playerId, gameState }: GameCanvasProps) {
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 h-full w-full cursor-crosshair"
+      className="absolute inset-0 isolate z-0 h-full w-full cursor-crosshair"
     />
   );
 }

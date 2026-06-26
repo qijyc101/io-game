@@ -3,10 +3,11 @@ import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import path from "path";
 import { fileURLToPath } from "url";
+import { SERVER_PORT } from "@io-game/shared";
 import { GameRoom } from "./GameRoom.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT) || 3001;
+const PORT = Number(process.env.PORT) || SERVER_PORT;
 const isProd = process.env.NODE_ENV === "production";
 
 const app = express();

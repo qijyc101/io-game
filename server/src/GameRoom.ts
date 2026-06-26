@@ -4,6 +4,9 @@ import {
   MAP_WIDTH,
   MAP_HEIGHT,
   RESPAWN_DELAY_MS,
+  NICKNAME_MAX_LENGTH,
+  LEADERBOARD_SIZE,
+  getWeapon,
 } from "@io-game/shared";
 import type {
   ClientMessage,
@@ -76,7 +79,7 @@ export class GameRoom {
 
     if (msg.type === "join") {
       if (conn.joined) return;
-      const nickname = msg.nickname.trim().slice(0, 16) || "Player";
+      const nickname = msg.nickname.trim().slice(0, NICKNAME_MAX_LENGTH) || "Player";
       const player = createPlayer(crypto.randomUUID(), nickname);
       this.players.set(player.id, player);
       conn.playerId = player.id;
@@ -133,13 +136,14 @@ export class GameRoom {
 
     for (const bullet of this.bullets) {
       if (hitBulletIds.has(bullet.id)) continue;
+      const weapon = getWeapon(bullet.weaponId);
 
       for (const player of this.players.values()) {
         if (!player.alive || player.id === bullet.ownerId) continue;
-        if (!bulletHitsPlayer(bullet.x, bullet.y, player.x, player.y)) continue;
+        if (!bulletHitsPlayer(bullet.x, bullet.y, weapon.bulletRadius, player.x, player.y)) continue;
 
         hitBulletIds.add(bullet.id);
-        player.hp -= 1;
+        player.hp -= weapon.damage;
 
         if (player.hp <= 0) {
           const killer = this.players.get(bullet.ownerId);
@@ -148,17 +152,22 @@ export class GameRoom {
             this.sendToPlayer(player.id, {
               type: "died",
               killerId: killer.id,
+              killerNickname: killer.nickname,
+              weaponName: weapon.name,
               respawnAt: now + RESPAWN_DELAY_MS,
             } satisfies DiedMessage);
             this.sendToPlayer(killer.id, {
               type: "killed",
               victimId: player.id,
               victimNickname: player.nickname,
+              weaponName: weapon.name,
             } satisfies KilledMessage);
           } else {
             this.sendToPlayer(player.id, {
               type: "died",
               killerId: null,
+              killerNickname: null,
+              weaponName: null,
               respawnAt: now + RESPAWN_DELAY_MS,
             } satisfies DiedMessage);
           }
@@ -184,7 +193,7 @@ export class GameRoom {
   private getLeaderboard(): LeaderboardEntry[] {
     return [...this.players.values()]
       .sort((a, b) => b.score - a.score)
-      .slice(0, 10)
+      .slice(0, LEADERBOARD_SIZE)
       .map((p) => ({ id: p.id, nickname: p.nickname, score: p.score }));
   }
 
@@ -199,6 +208,7 @@ export class GameRoom {
       score: p.score,
       alive: p.alive,
       respawnAt: p.respawnAt,
+      weaponId: p.weaponId,
     };
   }
 
@@ -206,6 +216,7 @@ export class GameRoom {
     return {
       id: b.id,
       ownerId: b.ownerId,
+      weaponId: b.weaponId,
       x: b.x,
       y: b.y,
       angle: b.angle,

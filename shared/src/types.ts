@@ -13,11 +13,13 @@ export interface PlayerState {
   score: number;
   alive: boolean;
   respawnAt: number | null;
+  weaponId: string;
 }
 
 export interface BulletState {
   id: string;
   ownerId: string;
+  weaponId: string;
   x: number;
   y: number;
   angle: number;
@@ -70,6 +72,8 @@ export interface StateMessage {
 export interface DiedMessage {
   type: "died";
   killerId: string | null;
+  killerNickname: string | null;
+  weaponName: string | null;
   respawnAt: number;
 }
 
@@ -77,6 +81,7 @@ export interface KilledMessage {
   type: "killed";
   victimId: string;
   victimNickname: string;
+  weaponName: string;
 }
 
 export type ServerMessage =

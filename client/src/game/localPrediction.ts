@@ -1,8 +1,10 @@
 import {
-  MAP_WIDTH,
-  MAP_HEIGHT,
   PLAYER_RADIUS,
   PLAYER_SPEED,
+  PREDICTION_SNAP_DISTANCE,
+  PREDICTION_BLEND_THRESHOLD,
+  PREDICTION_BLEND_FACTOR,
+  clampToMap,
 } from "@io-game/shared";
 
 export class LocalPredictor {
@@ -34,9 +36,9 @@ export class LocalPredictor {
     this.x += (moveX / len) * PLAYER_SPEED * dt;
     this.y += (moveY / len) * PLAYER_SPEED * dt;
 
-    const r = PLAYER_RADIUS;
-    this.x = Math.max(r, Math.min(MAP_WIDTH - r, this.x));
-    this.y = Math.max(r, Math.min(MAP_HEIGHT - r, this.y));
+    const clamped = clampToMap(this.x, this.y, PLAYER_RADIUS);
+    this.x = clamped.x;
+    this.y = clamped.y;
   }
 
   reconcile(serverX: number, serverY: number, serverAngle: number, alive: boolean): void {
@@ -56,12 +58,12 @@ export class LocalPredictor {
     const dy = serverY - this.y;
     const err = Math.hypot(dx, dy);
 
-    if (err > 100) {
+    if (err > PREDICTION_SNAP_DISTANCE) {
       this.x = serverX;
       this.y = serverY;
-    } else if (err > 0.5) {
-      this.x += dx * 0.4;
-      this.y += dy * 0.4;
+    } else if (err > PREDICTION_BLEND_THRESHOLD) {
+      this.x += dx * PREDICTION_BLEND_FACTOR;
+      this.y += dy * PREDICTION_BLEND_FACTOR;
     }
 
     this.angle = serverAngle;

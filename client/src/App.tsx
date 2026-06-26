@@ -13,6 +13,10 @@ export default function App() {
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [gameState, setGameState] = useState<StateMessage | null>(null);
   const [respawnAt, setRespawnAt] = useState<number | null>(null);
+  const [deathInfo, setDeathInfo] = useState<{
+    killerNickname: string | null;
+    weaponName: string | null;
+  } | null>(null);
   const [killFeed, setKillFeed] = useState<string | null>(null);
   const [, setTick] = useState(0);
 
@@ -28,9 +32,13 @@ export default function App() {
         },
         onDied: (msg) => {
           setRespawnAt(msg.respawnAt);
+          setDeathInfo({
+            killerNickname: msg.killerNickname,
+            weaponName: msg.weaponName,
+          });
         },
         onKilled: (msg) => {
-          setKillFeed(`Killed ${msg.victimNickname}!`);
+          setKillFeed(`Killed ${msg.victimNickname} with ${msg.weaponName}!`);
           setTimeout(() => setKillFeed(null), 2000);
         },
         onDisconnect: () => {
@@ -65,6 +73,7 @@ export default function App() {
   useEffect(() => {
     if (localPlayer?.alive) {
       setRespawnAt(null);
+      setDeathInfo(null);
     } else if (localPlayer?.respawnAt) {
       setRespawnAt(localPlayer.respawnAt);
     }
@@ -84,15 +93,22 @@ export default function App() {
         <HUD
           hp={localPlayer.hp}
           score={localPlayer.score}
+          weaponId={localPlayer.weaponId}
           leaderboard={gameState?.leaderboard ?? []}
           playerId={playerId!}
         />
       )}
 
-      {isDead && <DeathOverlay respawnAt={respawnAt} />}
+      {isDead && (
+        <DeathOverlay
+          respawnAt={respawnAt}
+          killerNickname={deathInfo?.killerNickname ?? null}
+          weaponName={deathInfo?.weaponName ?? null}
+        />
+      )}
 
       {killFeed && (
-        <div className="pointer-events-none absolute bottom-8 left-1/2 -translate-x-1/2 rounded-lg bg-green-900/80 px-4 py-2 text-sm font-semibold text-green-300">
+        <div className="pointer-events-none absolute bottom-8 left-1/2 z-10 -translate-x-1/2 rounded-lg bg-green-900/80 px-4 py-2 text-sm font-semibold text-green-300">
           {killFeed}
         </div>
       )}

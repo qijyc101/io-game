@@ -3,22 +3,34 @@ import {
   MAP_WIDTH,
   MAP_HEIGHT,
   PLAYER_RADIUS,
-  BULLET_RADIUS,
+  PLAYER_AIM_LINE_LENGTH,
   VIEWPORT_WIDTH,
   VIEWPORT_HEIGHT,
+  CAMERA_DEAD_ZONE_WIDTH,
+  CAMERA_DEAD_ZONE_HEIGHT,
+  CAMERA_SMOOTH_DECAY,
+  CAMERA_DEBUG_DEAD_ZONE,
+  INTERP_MS,
+  FOG_OVERLAY_FILL,
+  FOG_OVERLAY_EDGE_COLOR,
+  FOG_OVERLAY_EDGE_WIDTH,
   OBSTACLES,
   canSeeTarget,
+  getCameraTarget,
+  getWeapon,
 } from "@io-game/shared";
 import type { PlayerState, BulletState } from "@io-game/shared";
 import type { InputState } from "./input";
 import { computeVisibilityPolygon } from "./visibilityPolygon";
-import { interpolatePosition, lerpAngle, INTERP_MS } from "./interpolation";
+import { interpolatePosition, lerpAngle } from "./interpolation";
 import { LocalPredictor } from "./localPrediction";
+import { bindViewportLayout } from "./viewportLayout";
 
 export interface GameApp {
   app: Application;
   fogCanvas: HTMLCanvasElement;
   fogCtx: CanvasRenderingContext2D;
+  destroyLayout: () => void;
 }
 
 function colorFromId(id: string): number {
@@ -49,6 +61,7 @@ interface InterpolatedPlayer extends InterpolatedEntity {
 
 interface InterpolatedBullet extends InterpolatedEntity {
   ownerId: string;
+  weaponId: string;
 }
 
 export class GameRenderer {
@@ -116,6 +129,25 @@ export class GameRenderer {
     }
   }
 
+  private drawDeadZoneDebug(vw: number, vh: number, visible: boolean): void {
+    if (!CAMERA_DEBUG_DEAD_ZONE || !visible) return;
+
+    const dpr = this.app.renderer.resolution;
+    const x = vw / 2 - CAMERA_DEAD_ZONE_WIDTH / 2;
+    const y = vh / 2 - CAMERA_DEAD_ZONE_HEIGHT / 2;
+
+    const ctx = this.fogCtx;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "rgba(56, 189, 248, 0.1)";
+    ctx.fillRect(x, y, CAMERA_DEAD_ZONE_WIDTH, CAMERA_DEAD_ZONE_HEIGHT);
+    ctx.strokeStyle = "rgba(56, 189, 248, 0.75)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, CAMERA_DEAD_ZONE_WIDTH, CAMERA_DEAD_ZONE_HEIGHT);
+    ctx.restore();
+  }
+
   updateState(players: PlayerState[], bullets: BulletState[], tick: number): void {
     if (tick === this.lastTick) return;
     this.lastTick = tick;
@@ -173,6 +205,7 @@ export class GameRenderer {
         existing.toX = b.x;
         existing.toY = b.y;
         existing.ownerId = b.ownerId;
+        existing.weaponId = b.weaponId;
         existing.receivedAt = now;
       } else {
         this.interpolatedBullets.set(b.id, {
@@ -181,6 +214,7 @@ export class GameRenderer {
           toX: b.x,
           toY: b.y,
           ownerId: b.ownerId,
+          weaponId: b.weaponId,
           receivedAt: now,
         });
       }
@@ -207,15 +241,13 @@ export class GameRenderer {
     const polygon = computeVisibilityPolygon(originX, originY, aim);
     const ctx = this.fogCtx;
     const canvas = this.fogCanvas;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = this.app.renderer.resolution;
     const pixelW = Math.round(vw * dpr);
     const pixelH = Math.round(vh * dpr);
 
     if (canvas.width !== pixelW || canvas.height !== pixelH) {
       canvas.width = pixelW;
       canvas.height = pixelH;
-      canvas.style.width = `${vw}px`;
-      canvas.style.height = `${vh}px`;
     }
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -224,7 +256,7 @@ export class GameRenderer {
     const ox = originX + screenOffsetX;
     const oy = originY + screenOffsetY;
 
-    ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
+    ctx.fillStyle = FOG_OVERLAY_FILL;
     ctx.fillRect(0, 0, vw, vh);
 
     if (polygon.length >= 2) {
@@ -238,8 +270,8 @@ export class GameRenderer {
       ctx.fill();
 
       ctx.globalCompositeOperation = "source-over";
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.35)";
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = FOG_OVERLAY_EDGE_COLOR;
+      ctx.lineWidth = FOG_OVERLAY_EDGE_WIDTH;
       ctx.beginPath();
       ctx.moveTo(ox, oy);
       for (const p of polygon) {
@@ -251,7 +283,7 @@ export class GameRenderer {
   }
 
   private clearFogOverlay(vw: number, vh: number): void {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = this.app.renderer.resolution;
     this.fogCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.fogCtx.clearRect(0, 0, vw, vh);
   }
@@ -308,9 +340,18 @@ export class GameRenderer {
       localAim = this.localPredictor.angle;
       hasLocal = true;
 
-      const camSmooth = 1 - Math.pow(0.02, dt);
-      this.cameraX += (localX - this.cameraX) * camSmooth;
-      this.cameraY += (localY - this.cameraY) * camSmooth;
+      const isMoving = Math.hypot(this.lastInput.move.x, this.lastInput.move.y) > 0;
+      const camTarget = getCameraTarget(
+        this.cameraX,
+        this.cameraY,
+        localX,
+        localY,
+        !isMoving,
+      );
+
+      const camSmooth = 1 - Math.pow(CAMERA_SMOOTH_DECAY, dt);
+      this.cameraX += (camTarget.x - this.cameraX) * camSmooth;
+      this.cameraY += (camTarget.y - this.cameraY) * camSmooth;
     }
 
     const vw = this.app.screen.width;
@@ -354,8 +395,8 @@ export class GameRenderer {
         g.fill(color);
         g.moveTo(x, y);
         g.lineTo(
-          x + Math.cos(angle) * (PLAYER_RADIUS + 10),
-          y + Math.sin(angle) * (PLAYER_RADIUS + 10),
+          x + Math.cos(angle) * (PLAYER_RADIUS + PLAYER_AIM_LINE_LENGTH),
+          y + Math.sin(angle) * (PLAYER_RADIUS + PLAYER_AIM_LINE_LENGTH),
         );
         g.stroke({ width: 3, color: 0xffffff });
       } else {
@@ -394,8 +435,9 @@ export class GameRenderer {
       if (!visible) continue;
 
       g.clear();
-      g.circle(pos.x, pos.y, BULLET_RADIUS);
-      g.fill(0xfbbf24);
+      const weapon = getWeapon(data.weaponId);
+      g.circle(pos.x, pos.y, weapon.bulletRadius);
+      g.fill(weapon.bulletColor);
     }
 
     this.worldContainer.position.set(
@@ -413,6 +455,7 @@ export class GameRenderer {
         vw,
         vh,
       );
+      this.drawDeadZoneDebug(vw, vh, true);
     } else {
       this.clearFogOverlay(vw, vh);
     }
@@ -434,26 +477,20 @@ export class GameRenderer {
 }
 
 export async function createPixiApp(parent: HTMLElement): Promise<GameApp> {
-  parent.style.position = "relative";
-
   const app = new Application();
   await app.init({
     width: VIEWPORT_WIDTH,
     height: VIEWPORT_HEIGHT,
     backgroundColor: 0x0f172a,
     antialias: true,
-    resizeTo: parent,
+    resolution: 1,
+    autoDensity: false,
   });
 
   const fogCanvas = document.createElement("canvas");
-  fogCanvas.style.position = "absolute";
-  fogCanvas.style.inset = "0";
-  fogCanvas.style.width = "100%";
-  fogCanvas.style.height = "100%";
   fogCanvas.style.pointerEvents = "none";
   fogCanvas.style.zIndex = "1";
 
-  app.canvas.style.position = "relative";
   app.canvas.style.zIndex = "0";
 
   parent.appendChild(app.canvas);
@@ -464,5 +501,10 @@ export async function createPixiApp(parent: HTMLElement): Promise<GameApp> {
     throw new Error("Could not create fog canvas context");
   }
 
-  return { app, fogCanvas, fogCtx };
+  const destroyLayout = bindViewportLayout(parent, app.canvas, fogCanvas, (layout) => {
+    app.renderer.resolution = layout.resolution;
+    app.renderer.resize(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+  });
+
+  return { app, fogCanvas, fogCtx, destroyLayout };
 }

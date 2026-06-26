@@ -4,11 +4,13 @@ import {
   PLAYER_RADIUS,
   PLAYER_SPEED,
   PLAYER_MAX_HP,
-  BULLET_RADIUS,
-  BULLET_SPEED,
-  BULLET_TTL_MS,
-  SHOOT_COOLDOWN_MS,
   RESPAWN_DELAY_MS,
+  SPAWN_MAP_MARGIN,
+  SPAWN_OBSTACLE_CLEARANCE,
+  SPAWN_ATTEMPTS,
+  DEFAULT_WEAPON_ID,
+  getWeapon,
+  clampToMap,
 } from "@io-game/shared";
 import type { Vec2 } from "@io-game/shared";
 import { circleOverlapsObstacles } from "./collision.js";
@@ -29,6 +31,7 @@ export interface Player {
   score: number;
   alive: boolean;
   respawnAt: number | null;
+  weaponId: string;
   move: Vec2;
   aim: number;
   shoot: boolean;
@@ -38,6 +41,7 @@ export interface Player {
 export interface Bullet {
   id: string;
   ownerId: string;
+  weaponId: string;
   x: number;
   y: number;
   angle: number;
@@ -56,6 +60,7 @@ export function createPlayer(id: string, nickname: string): Player {
     score: 0,
     alive: true,
     respawnAt: null,
+    weaponId: DEFAULT_WEAPON_ID,
     move: { x: 0, y: 0 },
     aim: 0,
     shoot: false,
@@ -63,10 +68,17 @@ export function createPlayer(id: string, nickname: string): Player {
   };
 }
 
-export function createBullet(ownerId: string, x: number, y: number, angle: number): Bullet {
+export function createBullet(
+  ownerId: string,
+  weaponId: string,
+  x: number,
+  y: number,
+  angle: number,
+): Bullet {
   return {
     id: generateId(),
     ownerId,
+    weaponId,
     x,
     y,
     angle,
@@ -75,27 +87,19 @@ export function createBullet(ownerId: string, x: number, y: number, angle: numbe
 }
 
 export function randomSpawnPosition(): Vec2 {
-  const margin = PLAYER_RADIUS + 50;
-  for (let attempt = 0; attempt < 50; attempt++) {
+  const margin = PLAYER_RADIUS + SPAWN_MAP_MARGIN;
+  for (let attempt = 0; attempt < SPAWN_ATTEMPTS; attempt++) {
     const x = margin + Math.random() * (MAP_WIDTH - margin * 2);
     const y = margin + Math.random() * (MAP_HEIGHT - margin * 2);
-    if (!circleOverlapsObstacles(x, y, PLAYER_RADIUS + 8)) {
+    if (!circleOverlapsObstacles(x, y, PLAYER_RADIUS + SPAWN_OBSTACLE_CLEARANCE)) {
       return { x, y };
     }
   }
   return { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 };
 }
 
-export function clampPosition(x: number, y: number): Vec2 {
-  const r = PLAYER_RADIUS;
-  return {
-    x: Math.max(r, Math.min(MAP_WIDTH - r, x)),
-    y: Math.max(r, Math.min(MAP_HEIGHT - r, y)),
-  };
-}
-
 function canPlaceCircle(x: number, y: number, radius: number): boolean {
-  const clamped = clampPosition(x, y);
+  const clamped = clampToMap(x, y, radius);
   if (clamped.x !== x || clamped.y !== y) return false;
   return !circleOverlapsObstacles(x, y, radius);
 }
@@ -126,31 +130,35 @@ export function movePlayer(player: Player, dt: number): void {
 
 export function tryShoot(player: Player, bullets: Bullet[], now: number): void {
   if (!player.alive || !player.shoot) return;
-  if (now - player.lastShootAt < SHOOT_COOLDOWN_MS) return;
+
+  const weapon = getWeapon(player.weaponId);
+  if (now - player.lastShootAt < weapon.fireRateMs) return;
 
   player.lastShootAt = now;
-  const offset = PLAYER_RADIUS + BULLET_RADIUS + 2;
+  const offset = PLAYER_RADIUS + weapon.bulletRadius + weapon.muzzleGap;
   const bx = player.x + Math.cos(player.aim) * offset;
   const by = player.y + Math.sin(player.aim) * offset;
-  if (circleOverlapsObstacles(bx, by, BULLET_RADIUS)) return;
-  bullets.push(createBullet(player.id, bx, by, player.aim));
+  if (circleOverlapsObstacles(bx, by, weapon.bulletRadius)) return;
+  bullets.push(createBullet(player.id, player.weaponId, bx, by, player.aim));
 }
 
 export function moveBullets(bullets: Bullet[], dt: number, now: number): Bullet[] {
   return bullets
-    .map((b) => ({
-      ...b,
-      x: b.x + Math.cos(b.angle) * BULLET_SPEED * dt,
-      y: b.y + Math.sin(b.angle) * BULLET_SPEED * dt,
-    }))
+    .map((b) => {
+      const weapon = getWeapon(b.weaponId);
+      return {
+        ...b,
+        x: b.x + Math.cos(b.angle) * weapon.bulletSpeed * dt,
+        y: b.y + Math.sin(b.angle) * weapon.bulletSpeed * dt,
+      };
+    })
     .filter((b) => {
+      const weapon = getWeapon(b.weaponId);
+      const r = weapon.bulletRadius;
       const inBounds =
-        b.x >= -BULLET_RADIUS &&
-        b.x <= MAP_WIDTH + BULLET_RADIUS &&
-        b.y >= -BULLET_RADIUS &&
-        b.y <= MAP_HEIGHT + BULLET_RADIUS;
-      const notExpired = now - b.createdAt < BULLET_TTL_MS;
-      const notInWall = !circleOverlapsObstacles(b.x, b.y, BULLET_RADIUS);
+        b.x >= -r && b.x <= MAP_WIDTH + r && b.y >= -r && b.y <= MAP_HEIGHT + r;
+      const notExpired = now - b.createdAt < weapon.bulletTtlMs;
+      const notInWall = !circleOverlapsObstacles(b.x, b.y, r);
       return inBounds && notExpired && notInWall;
     });
 }

@@ -1,10 +1,6 @@
+import { VIEW_RANGE, VIEW_ANGLE } from "./config.js";
+import { normalizeAngle } from "./math.js";
 import { OBSTACLES } from "./obstacles.js";
-
-/** Max distance the local player can spot enemies */
-export const VIEW_RANGE = 700;
-
-/** Vision cone width in radians (centered on aim direction) */
-export const VIEW_ANGLE = (2 * Math.PI) / 3;
 
 function segmentsIntersect(
   ax: number,
@@ -55,13 +51,6 @@ export function hasLineOfSight(
     }
   }
   return true;
-}
-
-function normalizeAngle(angle: number): number {
-  let a = angle;
-  while (a > Math.PI) a -= 2 * Math.PI;
-  while (a < -Math.PI) a += 2 * Math.PI;
-  return a;
 }
 
 /** Whether the viewer can see a target (FOV cone + range + obstacle LOS) */

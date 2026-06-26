@@ -1,16 +1,14 @@
-import { OBSTACLES, VIEW_RANGE, VIEW_ANGLE } from "@io-game/shared";
-
-export interface Vec2 {
-  x: number;
-  y: number;
-}
-
-function normalizeAngle(angle: number): number {
-  let a = angle;
-  while (a > Math.PI) a -= 2 * Math.PI;
-  while (a < -Math.PI) a += 2 * Math.PI;
-  return a;
-}
+import {
+  OBSTACLES,
+  VIEW_RANGE,
+  VIEW_ANGLE,
+  FOG_RAY_COUNT,
+  FOG_CORNER_ANGLE_EPS,
+  FOG_CORNER_CONE_PADDING,
+  FOG_ANGLE_FILTER_EPS,
+  normalizeAngle,
+} from "@io-game/shared";
+import type { Vec2 } from "@io-game/shared";
 
 function raySegmentIntersect(
   ox: number,
@@ -61,12 +59,12 @@ function collectRayAngles(ox: number, oy: number, aim: number): number[] {
   const end = aim + half;
   const angles = new Set<number>();
 
-  const rayCount = 90;
+  const rayCount = FOG_RAY_COUNT;
   for (let i = 0; i <= rayCount; i++) {
     angles.add(start + ((end - start) * i) / rayCount);
   }
 
-  const eps = 0.00015;
+  const eps = FOG_CORNER_ANGLE_EPS;
   for (const o of OBSTACLES) {
     const corners: [number, number][] = [
       [o.x, o.y],
@@ -77,7 +75,7 @@ function collectRayAngles(ox: number, oy: number, aim: number): number[] {
     for (const [cx, cy] of corners) {
       const a = Math.atan2(cy - oy, cx - ox);
       const rel = normalizeAngle(a - aim);
-      if (Math.abs(rel) <= half + 0.01) {
+      if (Math.abs(rel) <= half + FOG_CORNER_CONE_PADDING) {
         angles.add(a - eps);
         angles.add(a);
         angles.add(a + eps);
@@ -87,7 +85,7 @@ function collectRayAngles(ox: number, oy: number, aim: number): number[] {
 
   return [...angles]
     .map((a) => ({ a, rel: normalizeAngle(a - aim) }))
-    .filter(({ rel }) => rel >= -half - 0.001 && rel <= half + 0.001)
+    .filter(({ rel }) => rel >= -half - FOG_ANGLE_FILTER_EPS && rel <= half + FOG_ANGLE_FILTER_EPS)
     .sort((p, q) => p.rel - q.rel)
     .map(({ a }) => a);
 }
