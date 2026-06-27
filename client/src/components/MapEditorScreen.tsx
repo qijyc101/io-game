@@ -3,18 +3,34 @@ import {
   ACTIVE_MAP,
   DEFAULT_MAP_HEIGHT,
   DEFAULT_MAP_WIDTH,
+  getTextureZIndex,
+  PLAYER_Z_INDEX,
 } from "@io-game/shared";
-import type { MapShape, StoredMapFile } from "@io-game/shared";
-import { createMap, deleteMap, fetchMap, fetchMapsIndex, saveMap } from "../mapEditor/api";
+import type { MapShape, MapTextureDef, StoredMapFile } from "@io-game/shared";
+import {
+  createMap,
+  deleteMap,
+  deleteMapTexture,
+  fetchMap,
+  fetchMapsIndex,
+  saveMap,
+  uploadMapTexture,
+} from "../mapEditor/api";
 import {
   applySnap,
+  clampPlayerReference,
+  createDefaultPlayerReference,
   createShapeId,
   DEFAULT_EDITOR_VIEW,
   dragShapes,
+  dragTextures,
   getRangeSelectionIds,
   getShapesInRect,
+  getTexturesInRect,
   getViewport,
+  hitTestPlayerReference,
   hitTestShape,
+  hitTestTexture,
   mergeSelectionIds,
   normalizeRect,
   renderEditorCanvas,
@@ -25,15 +41,32 @@ import {
   type Draft,
   type EditorViewState,
   type PanState,
+  type PlayerReference,
+  type TextureDragState,
   type Tool,
 } from "../mapEditor/editorUtils";
+import { loadEditorTextureImage } from "../mapEditor/textureCache";
 
 const DEFAULT_LINE_THICKNESS = 25;
 const MAP_SIZE_MIN = 400;
 const MAP_SIZE_MAX = 8000;
+const TEXTURE_MAX_DIMENSION = 800;
 
 function clampMapSize(value: number): number {
   return Math.min(MAP_SIZE_MAX, Math.max(MAP_SIZE_MIN, Math.round(value)));
+}
+
+function scaleTexturePlacement(texture: MapTextureDef, mapSize: { width: number; height: number }): MapTextureDef {
+  const scale = Math.min(1, TEXTURE_MAX_DIMENSION / Math.max(texture.width, texture.height));
+  const width = texture.width * scale;
+  const height = texture.height * scale;
+  return {
+    ...texture,
+    x: mapSize.width / 2 - width / 2,
+    y: mapSize.height / 2 - height / 2,
+    width,
+    height,
+  };
 }
 
 type SaveStatus = "loading" | "ready" | "saving" | "saved" | "error";
@@ -54,9 +87,15 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const textureDragRef = useRef<TextureDragState | null>(null);
   const panRef = useRef<PanState | null>(null);
+  const playerDragRef = useRef<{ startX: number; startY: number; origin: PlayerReference } | null>(
+    null,
+  );
+  const textureInputRef = useRef<HTMLInputElement>(null);
   const snapRef = useRef(false);
   const lastSelectedIdRef = useRef<string | null>(null);
+  const lastSelectedTextureIdRef = useRef<string | null>(null);
 
   const [mapNames, setMapNames] = useState<string[]>([]);
   const [activeMapName, setActiveMapName] = useState(ACTIVE_MAP);
@@ -66,12 +105,22 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
   const [mapWidthInput, setMapWidthInput] = useState(String(DEFAULT_MAP_WIDTH));
   const [mapHeightInput, setMapHeightInput] = useState(String(DEFAULT_MAP_HEIGHT));
   const [shapes, setShapes] = useState<MapShape[]>([]);
+  const [textures, setTextures] = useState<MapTextureDef[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedTextureIds, setSelectedTextureIds] = useState<string[]>([]);
+  const [textureRevision, setTextureRevision] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isUploadingTextures, setIsUploadingTextures] = useState(false);
   const [tool, setTool] = useState<Tool>("select");
   const [lineThickness, setLineThickness] = useState(DEFAULT_LINE_THICKNESS);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [selectionBox, setSelectionBox] = useState<Draft | null>(null);
   const [view, setView] = useState<EditorViewState>(DEFAULT_EDITOR_VIEW);
+  const [showPlayerReference, setShowPlayerReference] = useState(true);
+  const [playerReference, setPlayerReference] = useState<PlayerReference>(() =>
+    createDefaultPlayerReference({ width: DEFAULT_MAP_WIDTH, height: DEFAULT_MAP_HEIGHT }),
+  );
+  const [playerReferenceSelected, setPlayerReferenceSelected] = useState(false);
   const [showNewMapModal, setShowNewMapModal] = useState(false);
   const [showDeleteMapModal, setShowDeleteMapModal] = useState(false);
   const [deleteMapError, setDeleteMapError] = useState<string | null>(null);
@@ -83,6 +132,7 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
 
   const mapSize = { width: mapWidth, height: mapHeight };
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedTextureIdSet = useMemo(() => new Set(selectedTextureIds), [selectedTextureIds]);
   const canDeleteCurrentMap =
     mapNames.length > 1 && currentMapName !== activeMapName;
 
@@ -97,12 +147,19 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
     setMapWidthInput(String(map.width));
     setMapHeightInput(String(map.height));
     setShapes(map.shapes);
+    setTextures(map.textures ?? []);
     setSelectedIds([]);
+    setSelectedTextureIds([]);
     lastSelectedIdRef.current = null;
+    lastSelectedTextureIdRef.current = null;
     setDraft(null);
     setSelectionBox(null);
     dragRef.current = null;
+    textureDragRef.current = null;
     panRef.current = null;
+    playerDragRef.current = null;
+    setPlayerReference(createDefaultPlayerReference({ width: map.width, height: map.height }));
+    setPlayerReferenceSelected(false);
     setView(DEFAULT_EDITOR_VIEW);
     setSaveStatus("ready");
     return map;
@@ -143,6 +200,7 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
       width: mapWidth,
       height: mapHeight,
       shapes,
+      textures,
       updatedAt: new Date().toISOString(),
     };
 
@@ -156,7 +214,29 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
     }, 500);
 
     return () => window.clearTimeout(timeoutId);
-  }, [currentMapName, mapWidth, mapHeight, shapes]);
+  }, [currentMapName, mapWidth, mapHeight, shapes, textures]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void Promise.all(
+      textures.map((texture) => loadEditorTextureImage(currentMapName, texture.file)),
+    )
+      .then(() => {
+        if (!cancelled) {
+          setTextureRevision((current) => current + 1);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTextureRevision((current) => current + 1);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentMapName, textures]);
 
   const commitMapWidth = () => {
     const parsed = Number(mapWidthInput);
@@ -167,6 +247,9 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
     const next = clampMapSize(parsed);
     setMapWidth(next);
     setMapWidthInput(String(next));
+    setPlayerReference((current) =>
+      clampPlayerReference(current, { width: next, height: mapHeight }),
+    );
   };
 
   const commitMapHeight = () => {
@@ -178,12 +261,17 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
     const next = clampMapSize(parsed);
     setMapHeight(next);
     setMapHeightInput(String(next));
+    setPlayerReference((current) =>
+      clampPlayerReference(current, { width: mapWidth, height: next }),
+    );
   };
 
   const handleShapeListSelect = (
     shapeId: string,
     event: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean },
   ) => {
+    setSelectedTextureIds([]);
+    lastSelectedTextureIdRef.current = null;
     const additive = event.ctrlKey || event.metaKey;
     if (event.shiftKey) {
       setSelectedIds(getRangeSelectionIds(shapes, lastSelectedIdRef.current, shapeId));
@@ -195,23 +283,106 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
     lastSelectedIdRef.current = shapeId;
   };
 
+  const handleTextureListSelect = (
+    textureId: string,
+    event: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean },
+  ) => {
+    setSelectedIds([]);
+    lastSelectedIdRef.current = null;
+    setPlayerReferenceSelected(false);
+    const additive = event.ctrlKey || event.metaKey;
+    if (additive) {
+      setSelectedTextureIds(toggleSelectionId(selectedTextureIds, textureId));
+    } else {
+      setSelectedTextureIds([textureId]);
+    }
+    lastSelectedTextureIdRef.current = textureId;
+  };
+
   const selectedShapes = shapes.filter((shape) => selectedIdSet.has(shape.id));
+  const selectedTextures = textures.filter((texture) => selectedTextureIdSet.has(texture.id));
+
+  const handleTextureUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    setUploadError(null);
+    setIsUploadingTextures(true);
+
+    try {
+      const uploaded: MapTextureDef[] = [];
+      for (const file of files) {
+        const texture = scaleTexturePlacement(
+          await uploadMapTexture(currentMapName, file),
+          mapSize,
+        );
+        uploaded.push(texture);
+      }
+      setTextures((current) => [...current, ...uploaded]);
+      setSelectedTextureIds(uploaded.map((texture) => texture.id));
+      setSelectedIds([]);
+      lastSelectedTextureIdRef.current = uploaded.at(-1)?.id ?? null;
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "Failed to upload textures.");
+    } finally {
+      setIsUploadingTextures(false);
+      event.target.value = "";
+    }
+  };
+
+  const updateSelectedTexture = (patch: Partial<MapTextureDef>) => {
+    if (selectedTextureIds.length !== 1) return;
+    const selectedId = selectedTextureIds[0]!;
+    setTextures((current) =>
+      current.map((texture) => (texture.id === selectedId ? { ...texture, ...patch } : texture)),
+    );
+  };
+
+  const updateSelectedShape = (updater: (shape: MapShape) => MapShape) => {
+    if (selectedIds.length !== 1) return;
+    const selectedId = selectedIds[0]!;
+    setShapes((current) =>
+      current.map((shape) => (shape.id === selectedId ? updater(shape) : shape)),
+    );
+  };
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     renderEditorCanvas(
       canvas,
+      currentMapName,
       mapSize,
       shapes,
+      textures,
       selectedIdSet,
+      selectedTextureIdSet,
       tool,
       draft,
       view,
       lineThickness,
       selectionBox,
+      showPlayerReference ? playerReference : null,
+      playerReferenceSelected,
     );
-  }, [draft, lineThickness, mapHeight, mapWidth, selectedIdSet, selectionBox, shapes, tool, view]);
+  }, [
+    currentMapName,
+    draft,
+    lineThickness,
+    mapHeight,
+    mapWidth,
+    playerReference,
+    playerReferenceSelected,
+    selectedIdSet,
+    selectedTextureIdSet,
+    selectionBox,
+    shapes,
+    textures,
+    textureRevision,
+    showPlayerReference,
+    tool,
+    view,
+  ]);
 
   useEffect(() => {
     redraw();
@@ -258,6 +429,7 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
         setDraft(null);
         setSelectionBox(null);
         dragRef.current = null;
+        textureDragRef.current = null;
         panRef.current = null;
         setShowNewMapModal(false);
         setShowDeleteMapModal(false);
@@ -274,12 +446,26 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
         return;
       }
       if (event.code !== "Delete" && event.code !== "Backspace") return;
-      if (selectedIds.length === 0) return;
+      if (selectedIds.length === 0 && selectedTextureIds.length === 0) return;
       event.preventDefault();
-      const remove = new Set(selectedIds);
-      setShapes((current) => current.filter((shape) => !remove.has(shape.id)));
-      setSelectedIds([]);
-      lastSelectedIdRef.current = null;
+
+      if (selectedIds.length > 0) {
+        const remove = new Set(selectedIds);
+        setShapes((current) => current.filter((shape) => !remove.has(shape.id)));
+        setSelectedIds([]);
+        lastSelectedIdRef.current = null;
+      }
+
+      if (selectedTextureIds.length > 0) {
+        const removeTextureIds = new Set(selectedTextureIds);
+        const removedTextures = textures.filter((texture) => removeTextureIds.has(texture.id));
+        setTextures((current) => current.filter((texture) => !removeTextureIds.has(texture.id)));
+        setSelectedTextureIds([]);
+        lastSelectedTextureIdRef.current = null;
+        for (const texture of removedTextures) {
+          void deleteMapTexture(currentMapName, texture.file).catch(() => undefined);
+        }
+      }
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
@@ -294,7 +480,7 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [selectedIds, shapes]);
+  }, [currentMapName, selectedIds, selectedTextureIds, shapes, textures]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -339,6 +525,11 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
       const hit = [...shapes].reverse().find((shape) => hitTestShape(shape, point.x, point.y));
       if (hit) {
         panRef.current = null;
+        setPlayerReferenceSelected(false);
+        playerDragRef.current = null;
+        textureDragRef.current = null;
+        setSelectedTextureIds([]);
+        lastSelectedTextureIdRef.current = null;
         if (event.ctrlKey || event.metaKey) {
           const next = toggleSelectionId(selectedIds, hit.id);
           setSelectedIds(next);
@@ -377,9 +568,65 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
           startY: point.y,
           origins: shapes.filter((shape) => dragIds.includes(shape.id)),
         };
-      } else {
+      } else if (
+        showPlayerReference &&
+        hitTestPlayerReference(playerReference, point.x, point.y)
+      ) {
         setSelectedIds([]);
         lastSelectedIdRef.current = null;
+        setSelectedTextureIds([]);
+        lastSelectedTextureIdRef.current = null;
+        setPlayerReferenceSelected(true);
+        playerDragRef.current = {
+          startX: point.x,
+          startY: point.y,
+          origin: playerReference,
+        };
+      } else {
+        const textureHit = [...textures]
+          .sort((a, b) => getTextureZIndex(b) - getTextureZIndex(a))
+          .find((texture) => hitTestTexture(texture, point.x, point.y));
+        if (textureHit) {
+          panRef.current = null;
+          setPlayerReferenceSelected(false);
+          playerDragRef.current = null;
+          setSelectedIds([]);
+          lastSelectedIdRef.current = null;
+          if (event.ctrlKey || event.metaKey) {
+            const next = toggleSelectionId(selectedTextureIds, textureHit.id);
+            setSelectedTextureIds(next);
+            lastSelectedTextureIdRef.current = textureHit.id;
+            if (next.includes(textureHit.id)) {
+              textureDragRef.current = {
+                textureIds: next,
+                startX: point.x,
+                startY: point.y,
+                origins: textures.filter((texture) => next.includes(texture.id)),
+              };
+            }
+            return;
+          }
+          const dragIds =
+            selectedTextureIds.includes(textureHit.id) && selectedTextureIds.length > 1
+              ? selectedTextureIds
+              : [textureHit.id];
+          if (dragIds.length === 1) {
+            setSelectedTextureIds([textureHit.id]);
+          }
+          lastSelectedTextureIdRef.current = textureHit.id;
+          textureDragRef.current = {
+            textureIds: dragIds,
+            startX: point.x,
+            startY: point.y,
+            origins: textures.filter((texture) => dragIds.includes(texture.id)),
+          };
+        } else {
+          setSelectedIds([]);
+          lastSelectedIdRef.current = null;
+          setSelectedTextureIds([]);
+          lastSelectedTextureIdRef.current = null;
+          setPlayerReferenceSelected(false);
+        }
       }
       return;
     }
@@ -438,6 +685,46 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
       return;
     }
 
+    const textureDrag = textureDragRef.current;
+    if (textureDrag) {
+      const moved = dragTextures(
+        textureDrag.origins,
+        textureDrag.startX,
+        textureDrag.startY,
+        point.x,
+        point.y,
+        shapes,
+        mapSize,
+        snapRef.current,
+      );
+      setTextures((current) => {
+        const movedById = new Map(moved.map((texture) => [texture.id, texture]));
+        return current.map((texture) => movedById.get(texture.id) ?? texture);
+      });
+      return;
+    }
+
+    const playerDrag = playerDragRef.current;
+    if (playerDrag) {
+      const dx = point.x - playerDrag.startX;
+      const dy = point.y - playerDrag.startY;
+      const snapped = applySnap(
+        playerDrag.origin.x + dx,
+        playerDrag.origin.y + dy,
+        shapes,
+        null,
+        mapSize,
+        snapRef.current,
+      );
+      setPlayerReference(
+        clampPlayerReference(
+          { ...playerDrag.origin, x: snapped.x, y: snapped.y },
+          mapSize,
+        ),
+      );
+      return;
+    }
+
     if (!draft) return;
 
     const snapped = applySnap(point.x, point.y, shapes, null, mapSize, snapRef.current);
@@ -458,6 +745,16 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
       return;
     }
 
+    if (textureDragRef.current) {
+      textureDragRef.current = null;
+      return;
+    }
+
+    if (playerDragRef.current) {
+      playerDragRef.current = null;
+      return;
+    }
+
     if (panRef.current) {
       panRef.current = null;
       return;
@@ -472,12 +769,17 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
         boxPoint.y,
       );
       const ids = getShapesInRect(shapes, rect);
+      const textureIds = getTexturesInRect(textures, rect);
       if (event.shiftKey) {
         setSelectedIds(mergeSelectionIds(selectedIds, ids));
+        setSelectedTextureIds(mergeSelectionIds(selectedTextureIds, textureIds));
       } else {
         setSelectedIds(ids);
+        setSelectedTextureIds(textureIds);
       }
       lastSelectedIdRef.current = ids.at(-1) ?? lastSelectedIdRef.current;
+      lastSelectedTextureIdRef.current =
+        textureIds.at(-1) ?? lastSelectedTextureIdRef.current;
       setSelectionBox(null);
       return;
     }
@@ -608,8 +910,6 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
         >
           Back
         </button>
-        <h1 className="text-lg font-semibold">{currentMapName}</h1>
-
         <label className="flex items-center gap-2 text-sm">
           W
           <input
@@ -660,6 +960,23 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
           ))}
         </div>
 
+        <input
+          ref={textureInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          multiple
+          className="hidden"
+          onChange={(event) => void handleTextureUpload(event)}
+        />
+        <button
+          type="button"
+          disabled={isUploadingTextures}
+          onClick={() => textureInputRef.current?.click()}
+          className="rounded-lg bg-violet-700 px-3 py-2 text-sm hover:bg-violet-600 disabled:cursor-wait disabled:opacity-60"
+        >
+          {isUploadingTextures ? "Uploading..." : "Upload textures"}
+        </button>
+
         {tool === "line" && (
           <label className="flex items-center gap-2 text-sm">
             Thickness
@@ -675,6 +992,16 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
             />
           </label>
         )}
+
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showPlayerReference}
+            onChange={(event) => setShowPlayerReference(event.target.checked)}
+            className="rounded border-slate-600"
+          />
+          Player ref
+        </label>
 
         <div className="flex items-center gap-1">
           <button
@@ -713,7 +1040,7 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
           </button>
         </div>
 
-        <span className="text-xs text-slate-400">{saveStatusLabel}</span>
+        {/* <span className="text-xs text-slate-400">{saveStatusLabel}</span> */}
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -789,11 +1116,110 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
           />
           <div className="pointer-events-none absolute left-4 top-4 rounded-lg bg-slate-900/80 px-3 py-2 text-xs text-slate-300">
             {mapWidth}×{mapHeight}. Shift — snap. Ctrl — toggle select. Alt + drag — area. RMB — pan.
+            Textures: z &lt; {PLAYER_Z_INDEX} under player, z ≥ {PLAYER_Z_INDEX} overhang.
           </div>
+          {uploadError && (
+            <div className="pointer-events-none absolute left-4 top-16 rounded-lg bg-red-950/90 px-3 py-2 text-xs text-red-300">
+              {uploadError}
+            </div>
+          )}
         </div>
 
         <aside className="flex w-56 flex-col border-l border-slate-700 bg-slate-800">
           <div className="border-b border-slate-700 px-4 py-3">
+            <h2 className="font-semibold">
+              Textures ({textures.length})
+              {selectedTextureIds.length > 0 && (
+                <span className="ml-1 text-sm font-normal text-violet-300">
+                  · {selectedTextureIds.length} selected
+                </span>
+              )}
+            </h2>
+            {selectedTextures.length === 1 && (
+              <div className="mt-3 space-y-2 text-xs text-violet-200">
+                <label className="flex items-center justify-between gap-2">
+                  W
+                  <input
+                    type="number"
+                    min={8}
+                    value={Math.round(selectedTextures[0]!.width)}
+                    onChange={(event) =>
+                      updateSelectedTexture({ width: Number(event.target.value) || 8 })
+                    }
+                    className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2">
+                  H
+                  <input
+                    type="number"
+                    min={8}
+                    value={Math.round(selectedTextures[0]!.height)}
+                    onChange={(event) =>
+                      updateSelectedTexture({ height: Number(event.target.value) || 8 })
+                    }
+                    className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2">
+                  Z
+                  <input
+                    type="number"
+                    value={getTextureZIndex(selectedTextures[0]!)}
+                    onChange={(event) =>
+                      updateSelectedTexture({ zIndex: Number(event.target.value) || 0 })
+                    }
+                    className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                  />
+                </label>
+                <p className="text-slate-400">
+                  &lt; {PLAYER_Z_INDEX} — пол/стены, ≥ {PLAYER_Z_INDEX} — навесы
+                </p>
+                <label className="flex items-center justify-between gap-2">
+                  Opacity
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={selectedTextures[0]!.opacity ?? 1}
+                    onChange={(event) =>
+                      updateSelectedTexture({
+                        opacity: Math.min(1, Math.max(0, Number(event.target.value) || 0)),
+                      })
+                    }
+                    className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+
+          <div className="max-h-48 overflow-auto px-4 py-3">
+            {textures.length === 0 ? (
+              <p className="text-sm text-slate-400">No textures yet.</p>
+            ) : (
+              <ul className="space-y-1 text-sm">
+                {textures.map((texture) => (
+                  <li key={texture.id}>
+                    <button
+                      type="button"
+                      onClick={(event) => handleTextureListSelect(texture.id, event)}
+                      className={`w-full rounded px-2 py-1 text-left ${
+                        selectedTextureIdSet.has(texture.id)
+                          ? "bg-violet-900/60 text-violet-200"
+                          : "hover:bg-slate-700"
+                      }`}
+                    >
+                      {texture.id} · z={getTextureZIndex(texture)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="border-b border-t border-slate-700 px-4 py-3">
             <h2 className="font-semibold">
               Shapes ({shapes.length})
               {selectedIds.length > 0 && (
@@ -802,11 +1228,86 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
                 </span>
               )}
             </h2>
-            {selectedShapes.length > 0 && (
+            {selectedShapes.length === 1 && (
+              <div className="mt-3 space-y-2 text-xs text-cyan-200">
+                {selectedShapes[0]!.kind === "rect" && (
+                  <>
+                    <label className="flex items-center justify-between gap-2">
+                      W
+                      <input
+                        type="number"
+                        min={8}
+                        value={Math.round(selectedShapes[0]!.width)}
+                        onChange={(event) =>
+                          updateSelectedShape((shape) =>
+                            shape.kind === "rect"
+                              ? { ...shape, width: Number(event.target.value) || 8 }
+                              : shape,
+                          )
+                        }
+                        className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-2">
+                      H
+                      <input
+                        type="number"
+                        min={8}
+                        value={Math.round(selectedShapes[0]!.height)}
+                        onChange={(event) =>
+                          updateSelectedShape((shape) =>
+                            shape.kind === "rect"
+                              ? { ...shape, height: Number(event.target.value) || 8 }
+                              : shape,
+                          )
+                        }
+                        className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                      />
+                    </label>
+                  </>
+                )}
+                {selectedShapes[0]!.kind === "circle" && (
+                  <label className="flex items-center justify-between gap-2">
+                    Radius
+                    <input
+                      type="number"
+                      min={4}
+                      value={Math.round(selectedShapes[0]!.radius)}
+                      onChange={(event) =>
+                        updateSelectedShape((shape) =>
+                          shape.kind === "circle"
+                            ? { ...shape, radius: Number(event.target.value) || 4 }
+                            : shape,
+                        )
+                      }
+                      className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                    />
+                  </label>
+                )}
+                {selectedShapes[0]!.kind === "line" && (
+                  <label className="flex items-center justify-between gap-2">
+                    Thickness
+                    <input
+                      type="number"
+                      min={4}
+                      max={200}
+                      value={Math.round(selectedShapes[0]!.thickness)}
+                      onChange={(event) =>
+                        updateSelectedShape((shape) =>
+                          shape.kind === "line"
+                            ? { ...shape, thickness: Number(event.target.value) || 4 }
+                            : shape,
+                        )
+                      }
+                      className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+            {selectedShapes.length > 1 && (
               <p className="mt-2 text-xs text-cyan-300">
-                {selectedShapes.length === 1
-                  ? `${selectedShapes[0]!.id} (${selectedShapes[0]!.kind})`
-                  : selectedShapes.map((shape) => shape.id).join(", ")}
+                {selectedShapes.map((shape) => shape.id).join(", ")}
               </p>
             )}
             {saveError && <p className="mt-2 text-xs text-red-400">{saveError}</p>}

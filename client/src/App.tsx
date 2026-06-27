@@ -5,8 +5,8 @@ import { NicknameScreen } from "./components/NicknameScreen";
 import { HUD } from "./components/HUD";
 import { DeathOverlay } from "./components/DeathOverlay";
 import { MapEditorScreen } from "./components/MapEditorScreen";
-import type { MapShape, StateMessage } from "@io-game/shared";
-import { DEFAULT_MAP_HEIGHT, DEFAULT_MAP_WIDTH } from "@io-game/shared";
+import type { MapShape, MapTextureDef, StateMessage } from "@io-game/shared";
+import { ACTIVE_MAP, DEFAULT_MAP_HEIGHT, DEFAULT_MAP_WIDTH } from "@io-game/shared";
 
 type Screen = "nickname" | "game" | "mapEditor";
 
@@ -21,6 +21,7 @@ export default function App() {
   } | null>(null);
   const [killFeed, setKillFeed] = useState<string | null>(null);
   const [shapes, setShapes] = useState<MapShape[]>([]);
+  const [textures, setTextures] = useState<MapTextureDef[]>([]);
   const [mapSize, setMapSize] = useState({ width: DEFAULT_MAP_WIDTH, height: DEFAULT_MAP_HEIGHT });
   const [, setTick] = useState(0);
 
@@ -30,6 +31,7 @@ export default function App() {
         onWelcome: (msg) => {
           setPlayerId(msg.id);
           setShapes(msg.shapes);
+          setTextures(msg.textures ?? []);
           setMapSize(msg.mapSize);
           setScreen("game");
         },
@@ -49,6 +51,7 @@ export default function App() {
         },
         onMapChanged: (msg) => {
           setShapes(msg.shapes);
+          setTextures(msg.textures ?? []);
           setMapSize(msg.mapSize);
         },
         onDisconnect: () => {
@@ -110,6 +113,8 @@ export default function App() {
           playerId={playerId}
           gameState={gameState}
           shapes={shapes}
+          textures={textures}
+          mapName={ACTIVE_MAP}
           mapSize={mapSize}
         />
       )}

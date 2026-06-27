@@ -19,6 +19,17 @@ let room: GameRoom;
 
 app.use(express.json({ limit: "1mb" }));
 
+app.get("/api/maps/:name/textures/:file", (req, res) => {
+  try {
+    const filePath = mapStore.getTexturePath(String(req.params.name), String(req.params.file));
+    res.sendFile(filePath);
+  } catch (error) {
+    res.status(404).json({
+      error: error instanceof Error ? error.message : "Texture not found.",
+    });
+  }
+});
+
 if (!isProd) {
   app.get("/api/maps", (_req, res) => {
     res.json({
@@ -65,13 +76,14 @@ if (!isProd) {
         width,
         height,
         shapes: req.body?.shapes ?? [],
+        textures: req.body?.textures ?? [],
       });
 
       if (name === ACTIVE_MAP) {
         room.setMap(stored.shapes, {
           width: stored.width,
           height: stored.height,
-        });
+        }, stored.textures);
       }
 
       res.json({ ok: true, ...stored });
@@ -82,6 +94,40 @@ if (!isProd) {
       });
     }
   });
+
+  app.delete("/api/maps/:name/textures/:file", async (req, res) => {
+    try {
+      const name = String(req.params.name);
+      const file = String(req.params.file);
+      await mapStore.deleteTextureFile(name, file);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Failed to delete texture.",
+      });
+    }
+  });
+
+  app.post(
+    "/api/maps/:name/textures",
+    express.raw({ type: "application/octet-stream", limit: "10mb" }),
+    async (req, res) => {
+      try {
+        const name = String(req.params.name);
+        const fileName = String(req.headers["x-file-name"] ?? "texture.png");
+        const width = Number(req.headers["x-image-width"]);
+        const height = Number(req.headers["x-image-height"]);
+        const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]);
+        const texture = await mapStore.uploadTexture(name, fileName, buffer, width, height);
+        res.status(201).json(texture);
+      } catch (error) {
+        res.status(400).json({
+          error: error instanceof Error ? error.message : "Failed to upload texture.",
+        });
+      }
+    },
+  );
 
   app.delete("/api/maps/:name", async (req, res) => {
     try {
@@ -120,10 +166,11 @@ wss.on("connection", (ws: WebSocket) => {
 async function start(): Promise<void> {
   await mapStore.init();
   const activeMap = mapStore.getActiveMap();
-  room = new GameRoom(activeMap.shapes, {
-    width: activeMap.width,
-    height: activeMap.height,
-  });
+  room = new GameRoom(
+    activeMap.shapes,
+    { width: activeMap.width, height: activeMap.height },
+    activeMap.textures,
+  );
   room.start();
 
   server.listen(PORT, () => {

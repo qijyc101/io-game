@@ -1,11 +1,39 @@
 import {
   MAP_GRID_SIZE,
   MAP_SNAP_THRESHOLD,
+  PLAYER_AIM_LINE_LENGTH,
+  PLAYER_RADIUS,
+  PLAYER_Z_INDEX,
   collectSnapGuides,
+  getTextureZIndex,
   moveShape,
   snapPoint,
 } from "@io-game/shared";
-import type { MapShape, MapSize } from "@io-game/shared";
+import type { MapShape, MapSize, MapTextureDef } from "@io-game/shared";
+import { moveTexture } from "@io-game/shared";
+import { getCachedTextureImage } from "./textureCache";
+
+export interface PlayerReference {
+  x: number;
+  y: number;
+  angle: number;
+}
+
+export function createDefaultPlayerReference(mapSize: MapSize): PlayerReference {
+  return { x: mapSize.width / 2, y: mapSize.height / 2, angle: 0 };
+}
+
+export function clampPlayerReference(ref: PlayerReference, mapSize: MapSize): PlayerReference {
+  return {
+    ...ref,
+    x: Math.min(mapSize.width - PLAYER_RADIUS, Math.max(PLAYER_RADIUS, ref.x)),
+    y: Math.min(mapSize.height - PLAYER_RADIUS, Math.max(PLAYER_RADIUS, ref.y)),
+  };
+}
+
+export function hitTestPlayerReference(ref: PlayerReference, x: number, y: number): boolean {
+  return Math.hypot(x - ref.x, y - ref.y) <= PLAYER_RADIUS + 4;
+}
 
 export type Tool = "select" | "rect" | "circle" | "line";
 export type Draft = { startX: number; startY: number; endX: number; endY: number };
@@ -14,6 +42,12 @@ export type DragState = {
   startX: number;
   startY: number;
   origins: MapShape[];
+};
+export type TextureDragState = {
+  textureIds: string[];
+  startX: number;
+  startY: number;
+  origins: MapTextureDef[];
 };
 export type PanState = {
   startScreenX: number;
@@ -253,6 +287,98 @@ export function hitTestShape(shape: MapShape, x: number, y: number): boolean {
   return distanceToSegment(x, y, shape.x1, shape.y1, shape.x2, shape.y2) <= shape.thickness / 2;
 }
 
+export function hitTestTexture(texture: MapTextureDef, x: number, y: number): boolean {
+  return (
+    x >= texture.x &&
+    x <= texture.x + texture.width &&
+    y >= texture.y &&
+    y <= texture.y + texture.height
+  );
+}
+
+export function getTexturesInRect(
+  textures: MapTextureDef[],
+  rect: { x: number; y: number; width: number; height: number },
+): string[] {
+  return textures
+    .filter((texture) =>
+      rectsIntersect(
+        { x: texture.x, y: texture.y, width: texture.width, height: texture.height },
+        rect,
+      ),
+    )
+    .map((texture) => texture.id);
+}
+
+export function dragTextures(
+  origins: MapTextureDef[],
+  startX: number,
+  startY: number,
+  currentX: number,
+  currentY: number,
+  shapes: MapShape[],
+  mapSize: MapSize,
+  snapEnabled: boolean,
+): MapTextureDef[] {
+  if (origins.length === 0) {
+    return [];
+  }
+
+  const primary = origins[0]!;
+  const rawDx = currentX - startX;
+  const rawDy = currentY - startY;
+  const anchor = { x: primary.x, y: primary.y };
+  const snapped = applySnap(anchor.x + rawDx, anchor.y + rawDy, shapes, null, mapSize, snapEnabled);
+  const dx = snapped.x - anchor.x;
+  const dy = snapped.y - anchor.y;
+  return origins.map((origin) => moveTexture(origin, dx, dy));
+}
+
+function drawMapTextures(
+  ctx: CanvasRenderingContext2D,
+  mapName: string,
+  textures: MapTextureDef[],
+  selectedIds: ReadonlySet<string>,
+  layer: "below-player" | "above-player",
+): void {
+  const sorted = [...textures].sort((a, b) => getTextureZIndex(a) - getTextureZIndex(b));
+
+  for (const texture of sorted) {
+    const zIndex = getTextureZIndex(texture);
+    if (layer === "below-player" && zIndex >= PLAYER_Z_INDEX) continue;
+    if (layer === "above-player" && zIndex < PLAYER_Z_INDEX) continue;
+
+    const image = getCachedTextureImage(mapName, texture.file);
+    const selected = selectedIds.has(texture.id);
+    const opacity = texture.opacity ?? 1;
+
+    ctx.save();
+    ctx.globalAlpha = opacity;
+
+    if (image) {
+      ctx.drawImage(image, texture.x, texture.y, texture.width, texture.height);
+    } else {
+      ctx.fillStyle = "rgba(148, 163, 184, 0.35)";
+      ctx.fillRect(texture.x, texture.y, texture.width, texture.height);
+    }
+
+    if (selected) {
+      ctx.strokeStyle = "#a855f7";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(texture.x, texture.y, texture.width, texture.height);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(`z=${zIndex}`, texture.x + 4, texture.y + 4);
+    }
+
+    ctx.restore();
+  }
+}
+
 function drawShape(ctx: CanvasRenderingContext2D, shape: MapShape, selected: boolean): void {
   ctx.save();
   ctx.fillStyle = selected ? "rgba(34, 211, 238, 0.45)" : "rgba(100, 116, 139, 0.55)";
@@ -325,16 +451,59 @@ function drawSelectionBox(ctx: CanvasRenderingContext2D, box: Draft): void {
   ctx.restore();
 }
 
+function drawPlayerReference(
+  ctx: CanvasRenderingContext2D,
+  ref: PlayerReference,
+  selected: boolean,
+): void {
+  const { x, y, angle } = ref;
+  const aimEndX = x + Math.cos(angle) * (PLAYER_RADIUS + PLAYER_AIM_LINE_LENGTH);
+  const aimEndY = y + Math.sin(angle) * (PLAYER_RADIUS + PLAYER_AIM_LINE_LENGTH);
+
+  ctx.save();
+
+  ctx.strokeStyle = selected ? "#22d3ee" : "rgba(56, 189, 248, 0.35)";
+  ctx.lineWidth = selected ? 2 : 1.5;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.arc(x, y, PLAYER_RADIUS, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = "rgba(56, 189, 248, 0.55)";
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(x, y, PLAYER_RADIUS, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.moveTo(x, y);
+  ctx.lineTo(aimEndX, aimEndY);
+  ctx.stroke();
+
+  ctx.fillStyle = "#e2e8f0";
+  ctx.font = "14px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.fillText(`Player r=${PLAYER_RADIUS}`, x, y - PLAYER_RADIUS - 6);
+
+  ctx.restore();
+}
+
 export function renderEditorCanvas(
   canvas: HTMLCanvasElement,
+  mapName: string,
   mapSize: MapSize,
   shapes: MapShape[],
+  textures: MapTextureDef[],
   selectedIds: ReadonlySet<string>,
+  selectedTextureIds: ReadonlySet<string>,
   tool: Tool,
   draft: Draft | null,
   view: EditorViewState = DEFAULT_EDITOR_VIEW,
   lineThickness = 25,
   selectionBox: Draft | null = null,
+  playerReference: PlayerReference | null = null,
+  playerReferenceSelected = false,
 ): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -369,9 +538,17 @@ export function renderEditorCanvas(
     ctx.stroke();
   }
 
+  drawMapTextures(ctx, mapName, textures, selectedTextureIds, "below-player");
+
   for (const shape of shapes) {
     drawShape(ctx, shape, selectedIds.has(shape.id));
   }
+
+  if (playerReference) {
+    drawPlayerReference(ctx, playerReference, playerReferenceSelected);
+  }
+
+  drawMapTextures(ctx, mapName, textures, selectedTextureIds, "above-player");
 
   if (selectionBox) {
     drawSelectionBox(ctx, selectionBox);

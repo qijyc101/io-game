@@ -1,9 +1,12 @@
-import { Application, Container, Graphics, Text } from "pixi.js";
+import { Application, Assets, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import {
   DEFAULT_MAP_HEIGHT,
   DEFAULT_MAP_WIDTH,
+  DEBUG_MAP_SHAPE_ALPHA,
+  DEBUG_SHOW_MAP_SHAPES,
   PLAYER_RADIUS,
   PLAYER_AIM_LINE_LENGTH,
+  PLAYER_Z_INDEX,
   VIEWPORT_WIDTH,
   VIEWPORT_HEIGHT,
   CAMERA_DEAD_ZONE_WIDTH,
@@ -16,9 +19,11 @@ import {
   FOG_OVERLAY_EDGE_WIDTH,
   canSeeTarget,
   getCameraTarget,
+  getTextureZIndex,
   getWeapon,
 } from "@io-game/shared";
-import type { HitEffect, MapShape, PlayerState, BulletState } from "@io-game/shared";
+import type { HitEffect, MapShape, MapTextureDef, PlayerState, BulletState } from "@io-game/shared";
+import { mapTextureUrl } from "../mapEditor/api";
 import type { InputState } from "./input";
 import { computeVisibilityPolygon } from "./visibilityPolygon";
 import { interpolatePosition, lerpAngle } from "./interpolation";
@@ -96,6 +101,10 @@ export class GameRenderer {
     shoot: false,
   };
   private shapes: MapShape[] = [];
+  private textures: MapTextureDef[] = [];
+  private mapName = "";
+  private textureLoadToken = 0;
+  private textureSprites = new Map<string, Sprite>();
   private hitEffects: ActiveHitEffect[] = [];
 
   constructor(gameApp: GameApp) {
@@ -103,18 +112,24 @@ export class GameRenderer {
     this.fogCanvas = gameApp.fogCanvas;
     this.fogCtx = gameApp.fogCtx;
     this.worldContainer = new Container();
+    this.worldContainer.sortableChildren = true;
     this.entityContainer = new Container();
     this.arenaGraphics = new Graphics();
     this.obstacleGraphics = new Graphics();
     this.hitGraphics = new Graphics();
 
+    this.arenaGraphics.zIndex = -100;
+    this.obstacleGraphics.zIndex = PLAYER_Z_INDEX - 5;
+    this.entityContainer.zIndex = PLAYER_Z_INDEX;
+    this.hitGraphics.zIndex = PLAYER_Z_INDEX + 5;
+
     this.app.stage.addChild(this.worldContainer);
-    this.drawArena();
-    this.drawMapShapes();
     this.worldContainer.addChild(this.arenaGraphics);
     this.worldContainer.addChild(this.obstacleGraphics);
     this.worldContainer.addChild(this.entityContainer);
     this.worldContainer.addChild(this.hitGraphics);
+    this.drawArena();
+    this.drawMapShapes();
   }
 
   setLocalPlayerId(id: string): void {
@@ -131,6 +146,73 @@ export class GameRenderer {
     this.drawMapShapes();
   }
 
+  setMapTextures(mapName: string, textures: MapTextureDef[]): void {
+    this.mapName = mapName;
+    this.textures = textures;
+    this.drawArena();
+    void this.syncTextureSprites();
+  }
+
+  private getTextureAlias(file: string): string {
+    return `map-texture:${this.mapName}:${file}`;
+  }
+
+  private async loadMapTexture(file: string): Promise<Texture> {
+    const alias = this.getTextureAlias(file);
+    if (Assets.cache.has(alias)) {
+      return Assets.get<Texture>(alias);
+    }
+
+    return Assets.load<Texture>({
+      alias,
+      src: mapTextureUrl(this.mapName, file),
+    });
+  }
+
+  private async syncTextureSprites(): Promise<void> {
+    const loadToken = ++this.textureLoadToken;
+    const activeIds = new Set(this.textures.map((texture) => texture.id));
+
+    for (const [id, sprite] of this.textureSprites) {
+      if (!activeIds.has(id)) {
+        sprite.destroy();
+        this.textureSprites.delete(id);
+      }
+    }
+
+    for (const texture of this.textures) {
+      if (loadToken !== this.textureLoadToken) {
+        return;
+      }
+
+      let sprite = this.textureSprites.get(texture.id);
+      if (!sprite) {
+        sprite = new Sprite(Texture.EMPTY);
+        this.worldContainer.addChild(sprite);
+        this.textureSprites.set(texture.id, sprite);
+      }
+
+      try {
+        const loadedTexture = await this.loadMapTexture(texture.file);
+        if (loadToken !== this.textureLoadToken) {
+          return;
+        }
+        sprite.texture = loadedTexture;
+      } catch {
+        sprite.texture = Texture.EMPTY;
+      }
+
+      sprite.zIndex = getTextureZIndex(texture);
+      sprite.x = texture.x;
+      sprite.y = texture.y;
+      sprite.width = texture.width;
+      sprite.height = texture.height;
+      sprite.alpha = texture.opacity ?? 1;
+    }
+
+    this.worldContainer.sortChildren();
+  }
+
   setMapSize(width: number, height: number): void {
     this.mapWidth = width;
     this.mapHeight = height;
@@ -142,26 +224,40 @@ export class GameRenderer {
 
   private drawArena(): void {
     this.arenaGraphics.clear();
+    if (this.textures.length === 0) {
+      this.arenaGraphics.rect(0, 0, this.mapWidth, this.mapHeight);
+      this.arenaGraphics.fill(0x1e293b);
+    }
     this.arenaGraphics.rect(0, 0, this.mapWidth, this.mapHeight);
-    this.arenaGraphics.fill(0x1e293b);
     this.arenaGraphics.stroke({ width: 4, color: 0x475569 });
   }
 
   private drawMapShapes(): void {
     this.obstacleGraphics.clear();
+    const showDebug = import.meta.env.DEV && DEBUG_SHOW_MAP_SHAPES;
+    this.obstacleGraphics.visible = showDebug;
+    if (!showDebug) {
+      return;
+    }
+
     for (const shape of this.shapes) {
       if (shape.kind === "rect") {
         this.obstacleGraphics.rect(shape.x, shape.y, shape.width, shape.height);
-        this.obstacleGraphics.fill(0x334155);
-        this.obstacleGraphics.stroke({ width: 2, color: 0x64748b });
+        this.obstacleGraphics.fill({ color: 0x334155, alpha: DEBUG_MAP_SHAPE_ALPHA });
+        this.obstacleGraphics.stroke({ width: 2, color: 0x64748b, alpha: DEBUG_MAP_SHAPE_ALPHA });
       } else if (shape.kind === "circle") {
         this.obstacleGraphics.circle(shape.x, shape.y, shape.radius);
-        this.obstacleGraphics.fill(0x334155);
-        this.obstacleGraphics.stroke({ width: 2, color: 0x64748b });
+        this.obstacleGraphics.fill({ color: 0x334155, alpha: DEBUG_MAP_SHAPE_ALPHA });
+        this.obstacleGraphics.stroke({ width: 2, color: 0x64748b, alpha: DEBUG_MAP_SHAPE_ALPHA });
       } else {
         this.obstacleGraphics.moveTo(shape.x1, shape.y1);
         this.obstacleGraphics.lineTo(shape.x2, shape.y2);
-        this.obstacleGraphics.stroke({ width: shape.thickness, color: 0x64748b, cap: "round" });
+        this.obstacleGraphics.stroke({
+          width: shape.thickness,
+          color: 0x64748b,
+          alpha: DEBUG_MAP_SHAPE_ALPHA,
+          cap: "round",
+        });
       }
     }
   }

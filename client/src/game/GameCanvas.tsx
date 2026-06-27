@@ -1,27 +1,50 @@
-import { useEffect, useRef } from "react";
-import { createPixiApp, GameRenderer } from "./renderer";
-import { initInput } from "./input";
-import type { GameSocket } from "../network/socket";
-import { MAX_FRAME_DT } from "@io-game/shared";
-import type { MapShape, StateMessage } from "@io-game/shared";
+import type { MapShape, MapTextureDef, StateMessage } from "@io-game/shared"
+import { MAX_FRAME_DT } from "@io-game/shared"
+import { Stats } from "pixi-stats"
+import { useEffect, useRef } from "react"
+import type { GameSocket } from "../network/socket"
+import { initInput } from "./input"
+import { createPixiApp, GameRenderer } from "./renderer"
 
 interface GameCanvasProps {
   socket: GameSocket;
   playerId: string;
   gameState: StateMessage | null;
   shapes: MapShape[];
+  textures: MapTextureDef[];
+  mapName: string;
   mapSize: { width: number; height: number };
 }
 
-export function GameCanvas({ socket, playerId, gameState, shapes, mapSize }: GameCanvasProps) {
+export function GameCanvas({
+  socket,
+  playerId,
+  gameState,
+  shapes,
+  textures,
+  mapName,
+  mapSize,
+}: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<GameRenderer | null>(null);
   const gameStateRef = useRef(gameState);
+  const shapesRef = useRef(shapes);
+  const texturesRef = useRef(textures);
+  const mapNameRef = useRef(mapName);
+  const mapSizeRef = useRef(mapSize);
   gameStateRef.current = gameState;
+  shapesRef.current = shapes;
+  texturesRef.current = textures;
+  mapNameRef.current = mapName;
+  mapSizeRef.current = mapSize;
 
   useEffect(() => {
     rendererRef.current?.setMapShapes(shapes);
   }, [shapes]);
+
+  useEffect(() => {
+    rendererRef.current?.setMapTextures(mapName, textures);
+  }, [mapName, textures]);
 
   useEffect(() => {
     rendererRef.current?.setMapSize(mapSize.width, mapSize.height);
@@ -37,6 +60,7 @@ export function GameCanvas({ socket, playerId, gameState, shapes, mapSize }: Gam
     let getInput: ReturnType<typeof initInput> | null = null;
     let rafId = 0;
     let lastFrameTime = performance.now();
+    let fpsStats: Stats | null = null;
 
     const unsubscribeState = socket.onStateMessage((state) => {
       renderer?.updateState(state.players, state.bullets, state.hits ?? [], state.tick);
@@ -62,11 +86,23 @@ export function GameCanvas({ socket, playerId, gameState, shapes, mapSize }: Gam
         return;
       }
 
+      if (import.meta.env.DEV) {
+        fpsStats = new Stats(gameApp.app.renderer, undefined, container);
+        if (fpsStats.domElement) {
+          fpsStats.domElement.style.position = "absolute";
+          fpsStats.domElement.style.bottom = "0";
+          fpsStats.domElement.style.left = "0";
+          fpsStats.domElement.style.zIndex = "10";
+          fpsStats.domElement.style.pointerEvents = "auto";
+        }
+      }
+
       renderer = new GameRenderer(gameApp);
       rendererRef.current = renderer;
       renderer.setLocalPlayerId(playerId);
-      renderer.setMapSize(mapSize.width, mapSize.height);
-      renderer.setMapShapes(shapes);
+      renderer.setMapSize(mapSizeRef.current.width, mapSizeRef.current.height);
+      renderer.setMapShapes(shapesRef.current);
+      renderer.setMapTextures(mapNameRef.current, texturesRef.current);
       getInput = initInput(gameApp.app.canvas);
 
       const initial = gameStateRef.current;
@@ -97,6 +133,7 @@ export function GameCanvas({ socket, playerId, gameState, shapes, mapSize }: Gam
       window.removeEventListener("keydown", onDebugKeyDown);
       unsubscribeState();
       cancelAnimationFrame(rafId);
+      fpsStats?.hidePanel();
       rendererRef.current = null;
       renderer?.destroy();
       gameApp?.destroyLayout();

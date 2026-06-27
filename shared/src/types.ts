@@ -1,4 +1,4 @@
-import type { MapShape } from "./mapEditor.js";
+import type { MapShape, MapTextureDef } from "./mapEditor.js";
 
 export interface Vec2 {
   x: number;
@@ -73,6 +73,7 @@ export interface WelcomeMessage {
   id: string;
   mapSize: { width: number; height: number };
   shapes: MapShape[];
+  textures: MapTextureDef[];
 }
 
 export interface StateMessage {
@@ -103,6 +104,7 @@ export interface MapChangedMessage {
   type: "mapChanged";
   mapSize: { width: number; height: number };
   shapes: MapShape[];
+  textures: MapTextureDef[];
 }
 
 export type ServerMessage =

@@ -1,6 +1,7 @@
 import {
   DEFAULT_MAP_HEIGHT,
   DEFAULT_MAP_WIDTH,
+  DEFAULT_TEXTURE_Z_INDEX,
 } from "./config.js";
 import type { ObstacleDef } from "./obstacles.js";
 
@@ -25,11 +26,28 @@ export type MapShape =
   | ({ kind: "circle" } & MapCircleDef)
   | ({ kind: "line" } & MapLineDef);
 
+export interface MapTextureDef {
+  id: string;
+  file: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex?: number;
+  opacity?: number;
+}
+
+export function getTextureZIndex(texture: MapTextureDef): number {
+  const zIndex = texture.zIndex;
+  return Number.isFinite(zIndex) ? zIndex! : DEFAULT_TEXTURE_Z_INDEX;
+}
+
 export interface StoredMapFile {
   name: string;
   width: number;
   height: number;
   shapes: MapShape[];
+  textures: MapTextureDef[];
   updatedAt: string;
 }
 
@@ -66,6 +84,10 @@ export function moveShape(shape: MapShape, dx: number, dy: number): MapShape {
     x2: shape.x2 + dx,
     y2: shape.y2 + dy,
   };
+}
+
+export function moveTexture(texture: MapTextureDef, dx: number, dy: number): MapTextureDef {
+  return { ...texture, x: texture.x + dx, y: texture.y + dy };
 }
 
 export function collectSnapGuides(
@@ -177,6 +199,36 @@ export function parseMapShapes(raw: unknown): MapShape[] {
   });
 }
 
+export function parseMapTextures(raw: unknown): MapTextureDef[] {
+  if (raw == null) {
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    throw new Error("Expected a JSON array of textures.");
+  }
+
+  return raw.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`Invalid texture at index ${index}.`);
+    }
+
+    const texture = item as Record<string, unknown>;
+    const opacity = Number(texture.opacity);
+    const zIndex = Number(texture.zIndex);
+
+    return {
+      id: String(texture.id ?? `t${index + 1}`),
+      file: String(texture.file ?? ""),
+      x: Number(texture.x),
+      y: Number(texture.y),
+      width: Number(texture.width),
+      height: Number(texture.height),
+      ...(Number.isFinite(zIndex) ? { zIndex } : {}),
+      ...(Number.isFinite(opacity) ? { opacity } : {}),
+    } satisfies MapTextureDef;
+  });
+}
+
 export function parseStoredMap(raw: unknown, name: string): StoredMapFile {
   const data = (raw && typeof raw === "object" ? raw : {}) as Partial<StoredMapFile>;
   const width = Number(data.width);
@@ -187,6 +239,7 @@ export function parseStoredMap(raw: unknown, name: string): StoredMapFile {
     width: Number.isFinite(width) && width > 0 ? width : DEFAULT_MAP_WIDTH,
     height: Number.isFinite(height) && height > 0 ? height : DEFAULT_MAP_HEIGHT,
     shapes: parseMapShapes(data.shapes ?? []),
+    textures: parseMapTextures(data.textures ?? []),
     updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : new Date().toISOString(),
   };
 }
@@ -197,6 +250,7 @@ export function createEmptyMap(name: string, width = DEFAULT_MAP_WIDTH, height =
     width,
     height,
     shapes: [],
+    textures: [],
     updatedAt: new Date().toISOString(),
   };
 }

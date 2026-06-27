@@ -10,6 +10,7 @@ import type {
   ClientMessage,
   InputMessage,
   MapShape,
+  MapTextureDef,
   PlayerState,
   BulletState,
   LeaderboardEntry,
@@ -45,18 +46,29 @@ export class GameRoom {
   private tick = 0;
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private shapes: MapShape[];
+  private textures: MapTextureDef[];
   private mapSize: { width: number; height: number };
   private tickHits: HitEffect[] = [];
 
-  constructor(shapes: MapShape[], mapSize: { width: number; height: number }) {
+  constructor(
+    shapes: MapShape[],
+    mapSize: { width: number; height: number },
+    textures: MapTextureDef[] = [],
+  ) {
     this.shapes = shapes;
+    this.textures = textures;
     this.mapSize = mapSize;
     setActiveShapes(shapes);
     setMapSize(mapSize.width, mapSize.height);
   }
 
-  setMap(shapes: MapShape[], mapSize: { width: number; height: number }): void {
+  setMap(
+    shapes: MapShape[],
+    mapSize: { width: number; height: number },
+    textures: MapTextureDef[] = [],
+  ): void {
     this.shapes = shapes;
+    this.textures = textures;
     this.mapSize = mapSize;
     setActiveShapes(shapes);
     setMapSize(mapSize.width, mapSize.height);
@@ -116,6 +128,7 @@ export class GameRoom {
           id: player.id,
           mapSize: this.mapSize,
           shapes: this.shapes,
+          textures: this.textures,
         }),
       );
       return;
@@ -278,6 +291,7 @@ export class GameRoom {
       type: "mapChanged",
       mapSize: this.mapSize,
       shapes: this.shapes,
+      textures: this.textures,
     } satisfies MapChangedMessage);
 
     for (const conn of this.clients.values()) {

@@ -20,6 +20,13 @@ export const DEFAULT_MAP_HEIGHT = 1500
 export const MAP_GRID_SIZE = 25
 export const MAP_SNAP_THRESHOLD = 10
 
+// Render layers (client)
+export const DEFAULT_TEXTURE_Z_INDEX = 0
+export const PLAYER_Z_INDEX = 50
+/** Draw collision shapes in game only when dev build and this flag is true */
+export const DEBUG_SHOW_MAP_SHAPES = true
+export const DEBUG_MAP_SHAPE_ALPHA = 0.35
+
 // Player
 export const PLAYER_RADIUS = 20
 export const PLAYER_SPEED = 250
