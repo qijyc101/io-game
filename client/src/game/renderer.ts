@@ -82,6 +82,7 @@ export class GameRenderer {
   private entityContainer: Container;
   private arenaGraphics: Graphics;
   private obstacleGraphics: Graphics;
+  private debugGraphics: Graphics;
   private hitGraphics: Graphics;
   private playerGraphics = new Map<string, Graphics>();
   private playerLabels = new Map<string, Text>();
@@ -116,6 +117,7 @@ export class GameRenderer {
     this.entityContainer = new Container();
     this.arenaGraphics = new Graphics();
     this.obstacleGraphics = new Graphics();
+    this.debugGraphics = new Graphics();
     this.hitGraphics = new Graphics();
 
     this.arenaGraphics.zIndex = -100;
@@ -123,6 +125,7 @@ export class GameRenderer {
     this.entityContainer.zIndex = PLAYER_Z_INDEX;
     this.hitGraphics.zIndex = PLAYER_Z_INDEX + 5;
 
+    this.app.stage.addChild(this.debugGraphics);
     this.app.stage.addChild(this.worldContainer);
     this.worldContainer.addChild(this.arenaGraphics);
     this.worldContainer.addChild(this.obstacleGraphics);
@@ -263,22 +266,18 @@ export class GameRenderer {
   }
 
   private drawDeadZoneDebug(vw: number, vh: number, visible: boolean): void {
-    if (!CAMERA_DEBUG_DEAD_ZONE || !visible) return;
+    if (!CAMERA_DEBUG_DEAD_ZONE || !visible) {
+      this.debugGraphics.clear();
+      return;
+    }
 
-    const dpr = this.app.renderer.resolution;
     const x = vw / 2 - CAMERA_DEAD_ZONE_WIDTH / 2;
     const y = vh / 2 - CAMERA_DEAD_ZONE_HEIGHT / 2;
 
-    const ctx = this.fogCtx;
-    ctx.save();
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = "rgba(56, 189, 248, 0.1)";
-    ctx.fillRect(x, y, CAMERA_DEAD_ZONE_WIDTH, CAMERA_DEAD_ZONE_HEIGHT);
-    ctx.strokeStyle = "rgba(56, 189, 248, 0.75)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x, y, CAMERA_DEAD_ZONE_WIDTH, CAMERA_DEAD_ZONE_HEIGHT);
-    ctx.restore();
+    this.debugGraphics.clear();
+    this.debugGraphics.rect(x, y, CAMERA_DEAD_ZONE_WIDTH, CAMERA_DEAD_ZONE_HEIGHT);
+    this.debugGraphics.fill({ color: 0x38bdf8, alpha: 0.1 });
+    this.debugGraphics.stroke({ width: 2, color: 0x38bdf8, alpha: 0.75 });
   }
 
   updateState(
@@ -404,8 +403,8 @@ export class GameRenderer {
       ctx.globalCompositeOperation = "destination-out";
       ctx.beginPath();
       ctx.moveTo(ox, oy);
-      for (const p of polygon) {
-        ctx.lineTo(p.x + screenOffsetX, p.y + screenOffsetY);
+      for (const point of polygon) {
+        ctx.lineTo(point.x + screenOffsetX, point.y + screenOffsetY);
       }
       ctx.closePath();
       ctx.fill();
@@ -415,12 +414,18 @@ export class GameRenderer {
       ctx.lineWidth = FOG_OVERLAY_EDGE_WIDTH;
       ctx.beginPath();
       ctx.moveTo(ox, oy);
-      for (const p of polygon) {
-        ctx.lineTo(p.x + screenOffsetX, p.y + screenOffsetY);
+      for (const point of polygon) {
+        ctx.lineTo(point.x + screenOffsetX, point.y + screenOffsetY);
       }
       ctx.closePath();
       ctx.stroke();
     }
+  }
+
+  private clearFogOverlay(vw: number, vh: number): void {
+    const dpr = this.app.renderer.resolution;
+    this.fogCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.fogCtx.clearRect(0, 0, vw, vh);
   }
 
   private drawHitEffects(now: number): void {
@@ -445,12 +450,6 @@ export class GameRenderer {
         this.hitGraphics.stroke({ width: 2, color: 0xffffff, alpha: alpha * 0.8 });
       }
     }
-  }
-
-  private clearFogOverlay(vw: number, vh: number): void {
-    const dpr = this.app.renderer.resolution;
-    this.fogCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.fogCtx.clearRect(0, 0, vw, vh);
   }
 
   private getPlayerPosition(
@@ -625,6 +624,7 @@ export class GameRenderer {
       this.drawDeadZoneDebug(vw, vh, true);
     } else {
       this.clearFogOverlay(vw, vh);
+      this.drawDeadZoneDebug(vw, vh, false);
     }
   }
 
@@ -637,6 +637,7 @@ export class GameRenderer {
     this.playerLabels.forEach((t) => t.destroy());
     this.bulletGraphics.forEach((g) => g.destroy());
     this.hitGraphics.destroy();
+    this.debugGraphics.destroy();
     this.arenaGraphics.destroy();
     this.obstacleGraphics.destroy();
     this.entityContainer.destroy({ children: true });
@@ -655,13 +656,14 @@ export async function createPixiApp(parent: HTMLElement): Promise<GameApp> {
     autoDensity: false,
   });
 
+  parent.appendChild(app.canvas);
+
   const fogCanvas = document.createElement("canvas");
   fogCanvas.style.pointerEvents = "none";
   fogCanvas.style.zIndex = "1";
 
   app.canvas.style.zIndex = "0";
 
-  parent.appendChild(app.canvas);
   parent.appendChild(fogCanvas);
 
   const fogCtx = fogCanvas.getContext("2d");

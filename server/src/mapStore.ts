@@ -47,13 +47,35 @@ function textureFilePath(mapName: string, file: string): string {
   return path.join(mapTexturesDir(mapName), sanitizeTextureFileName(file));
 }
 
-function createTextureId(textures: MapTextureDef[]): string {
-  let index = textures.length + 1;
-  const ids = new Set(textures.map((texture) => texture.id));
+function createTextureId(ids: ReadonlySet<string>): string {
+  let index = 1;
   while (ids.has(`t${index}`)) {
     index += 1;
   }
   return `t${index}`;
+}
+
+async function collectTextureIds(
+  mapName: string,
+  textures: MapTextureDef[],
+): Promise<Set<string>> {
+  const ids = new Set(textures.map((texture) => texture.id));
+  try {
+    const files = await fs.readdir(mapTexturesDir(mapName));
+    for (const entry of files) {
+      const match = /^t(\d+)\.[^.]+$/i.exec(entry);
+      if (match) {
+        ids.add(`t${match[1]}`);
+      }
+    }
+  } catch {
+    // textures directory may not exist yet
+  }
+  return ids;
+}
+
+async function allocateTextureId(mapName: string, textures: MapTextureDef[]): Promise<string> {
+  return createTextureId(await collectTextureIds(mapName, textures));
 }
 
 export class MapStore {
@@ -171,13 +193,13 @@ export class MapStore {
     }
 
     const map = this.getMap(safeName);
-    const id = createTextureId(map.textures);
+    const id = await allocateTextureId(safeName, map.textures);
     const file = `${id}${ext}`;
     const dir = mapTexturesDir(safeName);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, file), buffer);
 
-    return {
+    const texture: MapTextureDef = {
       id,
       file,
       x: 0,
@@ -187,6 +209,13 @@ export class MapStore {
       opacity: 1,
       zIndex: DEFAULT_TEXTURE_Z_INDEX,
     };
+
+    this.maps.set(safeName, {
+      ...map,
+      textures: [...map.textures, texture],
+    });
+
+    return texture;
   }
 
   async deleteTextureFile(mapName: string, file: string): Promise<void> {

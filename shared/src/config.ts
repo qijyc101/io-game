@@ -24,7 +24,7 @@ export const MAP_SNAP_THRESHOLD = 10
 export const DEFAULT_TEXTURE_Z_INDEX = 0
 export const PLAYER_Z_INDEX = 50
 /** Draw collision shapes in game only when dev build and this flag is true */
-export const DEBUG_SHOW_MAP_SHAPES = true
+export const DEBUG_SHOW_MAP_SHAPES = false
 export const DEBUG_MAP_SHAPE_ALPHA = 0.35
 
 // Player
@@ -58,7 +58,7 @@ export const CAMERA_DEAD_ZONE_HEIGHT = 120
 /** Half-extent for camera scroll; debug rect uses WIDTH/HEIGHT above */
 export const CAMERA_DEAD_ZONE_RUBBER = 10
 export const CAMERA_SMOOTH_DECAY = 0.04
-export const CAMERA_DEBUG_DEAD_ZONE = false
+export const CAMERA_DEBUG_DEAD_ZONE = true
 
 // Spawn
 export const SPAWN_MAP_MARGIN = 50

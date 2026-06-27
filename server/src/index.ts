@@ -11,6 +11,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || SERVER_PORT;
 const isProd = process.env.NODE_ENV === "production";
 
+function decodeUploadFileName(header: string | string[] | undefined): string {
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw) {
+    return "texture.png";
+  }
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
@@ -115,7 +127,7 @@ if (!isProd) {
     async (req, res) => {
       try {
         const name = String(req.params.name);
-        const fileName = String(req.headers["x-file-name"] ?? "texture.png");
+        const fileName = decodeUploadFileName(req.headers["x-file-name"]);
         const width = Number(req.headers["x-image-width"]);
         const height = Number(req.headers["x-image-height"]);
         const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]);

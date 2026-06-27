@@ -233,6 +233,24 @@ export function getRangeSelectionIds(
   return shapes.slice(start, end + 1).map((shape) => shape.id);
 }
 
+export function getTextureRangeSelectionIds(
+  textures: MapTextureDef[],
+  anchorId: string | null,
+  targetId: string,
+): string[] {
+  if (!anchorId) {
+    return [targetId];
+  }
+  const anchorIndex = textures.findIndex((texture) => texture.id === anchorId);
+  const targetIndex = textures.findIndex((texture) => texture.id === targetId);
+  if (anchorIndex < 0 || targetIndex < 0) {
+    return [targetId];
+  }
+  const start = Math.min(anchorIndex, targetIndex);
+  const end = Math.max(anchorIndex, targetIndex);
+  return textures.slice(start, end + 1).map((texture) => texture.id);
+}
+
 export function toggleSelectionId(selectedIds: readonly string[], id: string): string[] {
   const next = new Set(selectedIds);
   if (next.has(id)) {

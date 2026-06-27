@@ -3,6 +3,7 @@ import {
   ACTIVE_MAP,
   DEFAULT_MAP_HEIGHT,
   DEFAULT_MAP_WIDTH,
+  dedupeMapTextures,
   getTextureZIndex,
   PLAYER_Z_INDEX,
 } from "@io-game/shared";
@@ -26,6 +27,7 @@ import {
   dragTextures,
   getRangeSelectionIds,
   getShapesInRect,
+  getTextureRangeSelectionIds,
   getTexturesInRect,
   getViewport,
   hitTestPlayerReference,
@@ -108,6 +110,8 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
   const [textures, setTextures] = useState<MapTextureDef[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedTextureIds, setSelectedTextureIds] = useState<string[]>([]);
+  const [textureScalePercent, setTextureScalePercent] = useState(100);
+  const textureScaleBaseRef = useRef<Map<string, { width: number; height: number }>>(new Map());
   const [textureRevision, setTextureRevision] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploadingTextures, setIsUploadingTextures] = useState(false);
@@ -147,7 +151,7 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
     setMapWidthInput(String(map.width));
     setMapHeightInput(String(map.height));
     setShapes(map.shapes);
-    setTextures(map.textures ?? []);
+    setTextures(dedupeMapTextures(map.textures ?? []));
     setSelectedIds([]);
     setSelectedTextureIds([]);
     lastSelectedIdRef.current = null;
@@ -291,13 +295,29 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
     lastSelectedIdRef.current = null;
     setPlayerReferenceSelected(false);
     const additive = event.ctrlKey || event.metaKey;
-    if (additive) {
+    if (event.shiftKey) {
+      setSelectedTextureIds(
+        getTextureRangeSelectionIds(textures, lastSelectedTextureIdRef.current, textureId),
+      );
+    } else if (additive) {
       setSelectedTextureIds(toggleSelectionId(selectedTextureIds, textureId));
     } else {
       setSelectedTextureIds([textureId]);
     }
     lastSelectedTextureIdRef.current = textureId;
   };
+
+  useEffect(() => {
+    const base = new Map<string, { width: number; height: number }>();
+    for (const id of selectedTextureIds) {
+      const texture = textures.find((item) => item.id === id);
+      if (texture) {
+        base.set(id, { width: texture.width, height: texture.height });
+      }
+    }
+    textureScaleBaseRef.current = base;
+    setTextureScalePercent(100);
+  }, [selectedTextureIds.join("|")]);
 
   const selectedShapes = shapes.filter((shape) => selectedIdSet.has(shape.id));
   const selectedTextures = textures.filter((texture) => selectedTextureIdSet.has(texture.id));
@@ -330,11 +350,31 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
     }
   };
 
-  const updateSelectedTexture = (patch: Partial<MapTextureDef>) => {
-    if (selectedTextureIds.length !== 1) return;
-    const selectedId = selectedTextureIds[0]!;
+  const updateSelectedTextures = (patch: Partial<MapTextureDef>) => {
+    if (selectedTextureIds.length === 0) return;
+    const selected = new Set(selectedTextureIds);
     setTextures((current) =>
-      current.map((texture) => (texture.id === selectedId ? { ...texture, ...patch } : texture)),
+      current.map((texture) => (selected.has(texture.id) ? { ...texture, ...patch } : texture)),
+    );
+  };
+
+  const updateSelectedTexture = (patch: Partial<MapTextureDef>) => {
+    updateSelectedTextures(patch);
+  };
+
+  const applyTextureScalePercent = (percent: number) => {
+    const factor = percent / 100;
+    const base = textureScaleBaseRef.current;
+    setTextures((current) =>
+      current.map((texture) => {
+        const origin = base.get(texture.id);
+        if (!origin) return texture;
+        return {
+          ...texture,
+          width: Math.max(8, origin.width * factor),
+          height: Math.max(8, origin.height * factor),
+        };
+      }),
     );
   };
 
@@ -592,6 +632,18 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
           playerDragRef.current = null;
           setSelectedIds([]);
           lastSelectedIdRef.current = null;
+          if (event.shiftKey) {
+            const next = mergeSelectionIds(selectedTextureIds, [textureHit.id]);
+            setSelectedTextureIds(next);
+            lastSelectedTextureIdRef.current = textureHit.id;
+            textureDragRef.current = {
+              textureIds: next,
+              startX: point.x,
+              startY: point.y,
+              origins: textures.filter((texture) => next.includes(texture.id)),
+            };
+            return;
+          }
           if (event.ctrlKey || event.metaKey) {
             const next = toggleSelectionId(selectedTextureIds, textureHit.id);
             setSelectedTextureIds(next);
@@ -1115,7 +1167,7 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
             onContextMenu={(event) => event.preventDefault()}
           />
           <div className="pointer-events-none absolute left-4 top-4 rounded-lg bg-slate-900/80 px-3 py-2 text-xs text-slate-300">
-            {mapWidth}×{mapHeight}. Shift — snap. Ctrl — toggle select. Alt + drag — area. RMB — pan.
+            {mapWidth}×{mapHeight}. Shift — snap / add texture. Ctrl — toggle select. Alt + drag — area. RMB — pan.
             Textures: z &lt; {PLAYER_Z_INDEX} under player, z ≥ {PLAYER_Z_INDEX} overhang.
           </div>
           {uploadError && (
@@ -1135,39 +1187,64 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
                 </span>
               )}
             </h2>
-            {selectedTextures.length === 1 && (
+            {selectedTextures.length > 0 && (
               <div className="mt-3 space-y-2 text-xs text-violet-200">
                 <label className="flex items-center justify-between gap-2">
-                  W
+                  Scale %
                   <input
                     type="number"
-                    min={8}
-                    value={Math.round(selectedTextures[0]!.width)}
-                    onChange={(event) =>
-                      updateSelectedTexture({ width: Number(event.target.value) || 8 })
-                    }
+                    min={10}
+                    max={500}
+                    step={5}
+                    value={textureScalePercent}
+                    onChange={(event) => {
+                      const next = Number(event.target.value) || 100;
+                      setTextureScalePercent(next);
+                      applyTextureScalePercent(next);
+                    }}
                     className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
                   />
                 </label>
-                <label className="flex items-center justify-between gap-2">
-                  H
-                  <input
-                    type="number"
-                    min={8}
-                    value={Math.round(selectedTextures[0]!.height)}
-                    onChange={(event) =>
-                      updateSelectedTexture({ height: Number(event.target.value) || 8 })
-                    }
-                    className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
-                  />
-                </label>
+                {selectedTextures.length === 1 && (
+                  <>
+                    <label className="flex items-center justify-between gap-2">
+                      W
+                      <input
+                        type="number"
+                        min={8}
+                        value={Math.round(selectedTextures[0]!.width)}
+                        onChange={(event) =>
+                          updateSelectedTexture({ width: Number(event.target.value) || 8 })
+                        }
+                        className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-2">
+                      H
+                      <input
+                        type="number"
+                        min={8}
+                        value={Math.round(selectedTextures[0]!.height)}
+                        onChange={(event) =>
+                          updateSelectedTexture({ height: Number(event.target.value) || 8 })
+                        }
+                        className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
+                      />
+                    </label>
+                  </>
+                )}
                 <label className="flex items-center justify-between gap-2">
                   Z
                   <input
                     type="number"
-                    value={getTextureZIndex(selectedTextures[0]!)}
+                    value={
+                      selectedTextures.length === 1
+                        ? getTextureZIndex(selectedTextures[0]!)
+                        : ""
+                    }
+                    placeholder={selectedTextures.length > 1 ? "mixed" : undefined}
                     onChange={(event) =>
-                      updateSelectedTexture({ zIndex: Number(event.target.value) || 0 })
+                      updateSelectedTextures({ zIndex: Number(event.target.value) || 0 })
                     }
                     className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-slate-100"
                   />
@@ -1182,9 +1259,12 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
                     min={0}
                     max={1}
                     step={0.05}
-                    value={selectedTextures[0]!.opacity ?? 1}
+                    value={
+                      selectedTextures.length === 1 ? (selectedTextures[0]!.opacity ?? 1) : ""
+                    }
+                    placeholder={selectedTextures.length > 1 ? "mixed" : undefined}
                     onChange={(event) =>
-                      updateSelectedTexture({
+                      updateSelectedTextures({
                         opacity: Math.min(1, Math.max(0, Number(event.target.value) || 0)),
                       })
                     }
@@ -1201,7 +1281,7 @@ export function MapEditorScreen({ onBack }: MapEditorScreenProps) {
             ) : (
               <ul className="space-y-1 text-sm">
                 {textures.map((texture) => (
-                  <li key={texture.id}>
+                  <li key={texture.file}>
                     <button
                       type="button"
                       onClick={(event) => handleTextureListSelect(texture.id, event)}

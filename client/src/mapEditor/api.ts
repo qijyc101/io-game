@@ -95,7 +95,7 @@ export async function uploadMapTexture(mapName: string, file: File): Promise<Map
     method: "POST",
     headers: {
       "Content-Type": "application/octet-stream",
-      "X-File-Name": file.name,
+      "X-File-Name": encodeURIComponent(file.name),
       "X-Image-Width": String(width),
       "X-Image-Height": String(height),
     },

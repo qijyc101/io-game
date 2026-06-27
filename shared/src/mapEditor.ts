@@ -42,6 +42,20 @@ export function getTextureZIndex(texture: MapTextureDef): number {
   return Number.isFinite(zIndex) ? zIndex! : DEFAULT_TEXTURE_Z_INDEX;
 }
 
+/** Keep one entry per texture file — guards against duplicate upload ids. */
+export function dedupeMapTextures(textures: MapTextureDef[]): MapTextureDef[] {
+  const seen = new Set<string>();
+  const result: MapTextureDef[] = [];
+  for (const texture of textures) {
+    if (!texture.file || seen.has(texture.file)) {
+      continue;
+    }
+    seen.add(texture.file);
+    result.push(texture);
+  }
+  return result;
+}
+
 export interface StoredMapFile {
   name: string;
   width: number;
@@ -239,7 +253,7 @@ export function parseStoredMap(raw: unknown, name: string): StoredMapFile {
     width: Number.isFinite(width) && width > 0 ? width : DEFAULT_MAP_WIDTH,
     height: Number.isFinite(height) && height > 0 ? height : DEFAULT_MAP_HEIGHT,
     shapes: parseMapShapes(data.shapes ?? []),
-    textures: parseMapTextures(data.textures ?? []),
+    textures: dedupeMapTextures(parseMapTextures(data.textures ?? [])),
     updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : new Date().toISOString(),
   };
 }
