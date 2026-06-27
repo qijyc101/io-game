@@ -7,3 +7,4 @@ export * from "./visibility.js";
 export * from "./mapEditor.js";
 export * from "./mapCollision.js";
 export * from "./movement.js";
+export * from "./bulletCollision.js";

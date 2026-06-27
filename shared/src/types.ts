@@ -27,6 +27,12 @@ export interface BulletState {
   angle: number;
 }
 
+export interface HitEffect {
+  x: number;
+  y: number;
+  kind: "player" | "wall";
+}
+
 export interface LeaderboardEntry {
   id: string;
   nickname: string;
@@ -74,6 +80,7 @@ export interface StateMessage {
   tick: number;
   players: PlayerState[];
   bullets: BulletState[];
+  hits: HitEffect[];
   leaderboard: LeaderboardEntry[];
 }
 

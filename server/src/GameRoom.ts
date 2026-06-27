@@ -16,18 +16,20 @@ import type {
   DiedMessage,
   KilledMessage,
   MapChangedMessage,
+  HitEffect,
 } from "@io-game/shared";
 import {
   createPlayer,
   movePlayer,
   tryShoot,
-  moveBullets,
+  simulateBullets,
   respawnPlayer,
   killPlayer,
   type Player,
   type Bullet,
+  type BulletImpact,
 } from "./entities.js";
-import { bulletHitsPlayer, setActiveShapes } from "./collision.js";
+import { setActiveShapes } from "./collision.js";
 import { setMapSize } from "./mapContext.js";
 
 interface ClientConnection {
@@ -44,6 +46,7 @@ export class GameRoom {
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private shapes: MapShape[];
   private mapSize: { width: number; height: number };
+  private tickHits: HitEffect[] = [];
 
   constructor(shapes: MapShape[], mapSize: { width: number; height: number }) {
     this.shapes = shapes;
@@ -166,66 +169,66 @@ export class GameRoom {
     const now = Date.now();
     this.tick++;
 
-    for (const player of this.players.values()) {
+    const playerList = [...this.players.values()];
+    for (const player of playerList) {
       respawnPlayer(player, now);
       movePlayer(player, dt);
       tryShoot(player, this.bullets, now);
       player.shoot = false;
     }
 
-    this.bullets = moveBullets(this.bullets, dt, now);
-    this.checkCollisions(now);
+    const bulletStep = simulateBullets(this.bullets, dt, now, playerList);
+    this.bullets = bulletStep.bullets;
+    this.processBulletImpacts(bulletStep.impacts, now);
     this.broadcastState();
   }
 
-  private checkCollisions(now: number): void {
-    const hitBulletIds = new Set<string>();
+  private processBulletImpacts(impacts: BulletImpact[], now: number): void {
+    for (const impact of impacts) {
+      this.tickHits.push({ x: impact.x, y: impact.y, kind: impact.kind });
 
-    for (const bullet of this.bullets) {
-      if (hitBulletIds.has(bullet.id)) continue;
-      const weapon = getWeapon(bullet.weaponId);
-
-      for (const player of this.players.values()) {
-        if (!player.alive || player.id === bullet.ownerId) continue;
-        if (!bulletHitsPlayer(bullet.x, bullet.y, weapon.bulletRadius, player.x, player.y)) continue;
-
-        hitBulletIds.add(bullet.id);
-        player.hp -= weapon.damage;
-
-        if (player.hp <= 0) {
-          const killer = this.players.get(bullet.ownerId);
-          if (killer) {
-            killer.score += 1;
-            this.sendToPlayer(player.id, {
-              type: "died",
-              killerId: killer.id,
-              killerNickname: killer.nickname,
-              weaponName: weapon.name,
-              respawnAt: now + RESPAWN_DELAY_MS,
-            } satisfies DiedMessage);
-            this.sendToPlayer(killer.id, {
-              type: "killed",
-              victimId: player.id,
-              victimNickname: player.nickname,
-              weaponName: weapon.name,
-            } satisfies KilledMessage);
-          } else {
-            this.sendToPlayer(player.id, {
-              type: "died",
-              killerId: null,
-              killerNickname: null,
-              weaponName: null,
-              respawnAt: now + RESPAWN_DELAY_MS,
-            } satisfies DiedMessage);
-          }
-          killPlayer(player, now);
-        }
-        break;
+      if (impact.kind !== "player" || !impact.playerId) {
+        continue;
       }
-    }
 
-    if (hitBulletIds.size > 0) {
-      this.bullets = this.bullets.filter((b) => !hitBulletIds.has(b.id));
+      const player = this.players.get(impact.playerId);
+      if (!player || !player.alive) {
+        continue;
+      }
+
+      const weapon = getWeapon(impact.weaponId);
+      player.hp -= weapon.damage;
+
+      if (player.hp > 0) {
+        continue;
+      }
+
+      const killer = this.players.get(impact.ownerId);
+      if (killer) {
+        killer.score += 1;
+        this.sendToPlayer(player.id, {
+          type: "died",
+          killerId: killer.id,
+          killerNickname: killer.nickname,
+          weaponName: weapon.name,
+          respawnAt: now + RESPAWN_DELAY_MS,
+        } satisfies DiedMessage);
+        this.sendToPlayer(killer.id, {
+          type: "killed",
+          victimId: player.id,
+          victimNickname: player.nickname,
+          weaponName: weapon.name,
+        } satisfies KilledMessage);
+      } else {
+        this.sendToPlayer(player.id, {
+          type: "died",
+          killerId: null,
+          killerNickname: null,
+          weaponName: null,
+          respawnAt: now + RESPAWN_DELAY_MS,
+        } satisfies DiedMessage);
+      }
+      killPlayer(player, now);
     }
   }
 
@@ -290,8 +293,10 @@ export class GameRoom {
       tick: this.tick,
       players: [...this.players.values()].map((p) => this.toPlayerState(p)),
       bullets: this.bullets.map((b) => this.toBulletState(b)),
+      hits: this.tickHits,
       leaderboard: this.getLeaderboard(),
     });
+    this.tickHits = [];
 
     for (const conn of this.clients.values()) {
       if (conn.joined && conn.ws.readyState === WebSocket.OPEN) {

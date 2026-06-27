@@ -18,7 +18,7 @@ import {
   getCameraTarget,
   getWeapon,
 } from "@io-game/shared";
-import type { MapShape, PlayerState, BulletState } from "@io-game/shared";
+import type { HitEffect, MapShape, PlayerState, BulletState } from "@io-game/shared";
 import type { InputState } from "./input";
 import { computeVisibilityPolygon } from "./visibilityPolygon";
 import { interpolatePosition, lerpAngle } from "./interpolation";
@@ -63,6 +63,12 @@ interface InterpolatedBullet extends InterpolatedEntity {
   weaponId: string;
 }
 
+interface ActiveHitEffect extends HitEffect {
+  spawnedAt: number;
+}
+
+const HIT_EFFECT_MS = 350;
+
 export class GameRenderer {
   private app: Application;
   private fogCanvas: HTMLCanvasElement;
@@ -71,6 +77,7 @@ export class GameRenderer {
   private entityContainer: Container;
   private arenaGraphics: Graphics;
   private obstacleGraphics: Graphics;
+  private hitGraphics: Graphics;
   private playerGraphics = new Map<string, Graphics>();
   private playerLabels = new Map<string, Text>();
   private bulletGraphics = new Map<string, Graphics>();
@@ -89,6 +96,7 @@ export class GameRenderer {
     shoot: false,
   };
   private shapes: MapShape[] = [];
+  private hitEffects: ActiveHitEffect[] = [];
 
   constructor(gameApp: GameApp) {
     this.app = gameApp.app;
@@ -98,6 +106,7 @@ export class GameRenderer {
     this.entityContainer = new Container();
     this.arenaGraphics = new Graphics();
     this.obstacleGraphics = new Graphics();
+    this.hitGraphics = new Graphics();
 
     this.app.stage.addChild(this.worldContainer);
     this.drawArena();
@@ -105,6 +114,7 @@ export class GameRenderer {
     this.worldContainer.addChild(this.arenaGraphics);
     this.worldContainer.addChild(this.obstacleGraphics);
     this.worldContainer.addChild(this.entityContainer);
+    this.worldContainer.addChild(this.hitGraphics);
   }
 
   setLocalPlayerId(id: string): void {
@@ -175,11 +185,19 @@ export class GameRenderer {
     ctx.restore();
   }
 
-  updateState(players: PlayerState[], bullets: BulletState[], tick: number): void {
+  updateState(
+    players: PlayerState[],
+    bullets: BulletState[],
+    hits: HitEffect[],
+    tick: number,
+  ): void {
     if (tick === this.lastTick) return;
     this.lastTick = tick;
 
     const now = performance.now();
+    for (const hit of hits) {
+      this.hitEffects.push({ ...hit, spawnedAt: now });
+    }
     const seenPlayers = new Set<string>();
     const seenBullets = new Set<string>();
 
@@ -306,6 +324,30 @@ export class GameRenderer {
       }
       ctx.closePath();
       ctx.stroke();
+    }
+  }
+
+  private drawHitEffects(now: number): void {
+    this.hitEffects = this.hitEffects.filter(
+      (effect) => now - effect.spawnedAt < HIT_EFFECT_MS,
+    );
+    this.hitGraphics.clear();
+
+    for (const hit of this.hitEffects) {
+      const t = (now - hit.spawnedAt) / HIT_EFFECT_MS;
+      const radius = 6 + t * 24;
+      const alpha = 1 - t;
+
+      if (hit.kind === "player") {
+        this.hitGraphics.circle(hit.x, hit.y, radius);
+        this.hitGraphics.stroke({ width: 3, color: 0xef4444, alpha });
+        this.hitGraphics.circle(hit.x, hit.y, radius * 0.5);
+        this.hitGraphics.fill({ color: 0xfca5a5, alpha: alpha * 0.5 });
+      } else {
+        this.hitGraphics.circle(hit.x, hit.y, radius);
+        this.hitGraphics.fill({ color: 0xfbbf24, alpha: alpha * 0.55 });
+        this.hitGraphics.stroke({ width: 2, color: 0xffffff, alpha: alpha * 0.8 });
+      }
     }
   }
 
@@ -467,6 +509,8 @@ export class GameRenderer {
       g.fill(weapon.bulletColor);
     }
 
+    this.drawHitEffects(now);
+
     this.worldContainer.position.set(
       vw / 2 - this.cameraX,
       vh / 2 - this.cameraY,
@@ -496,6 +540,7 @@ export class GameRenderer {
     this.playerGraphics.forEach((g) => g.destroy());
     this.playerLabels.forEach((t) => t.destroy());
     this.bulletGraphics.forEach((g) => g.destroy());
+    this.hitGraphics.destroy();
     this.arenaGraphics.destroy();
     this.obstacleGraphics.destroy();
     this.entityContainer.destroy({ children: true });

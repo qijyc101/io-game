@@ -39,7 +39,7 @@ export function GameCanvas({ socket, playerId, gameState, shapes, mapSize }: Gam
     let lastFrameTime = performance.now();
 
     const unsubscribeState = socket.onStateMessage((state) => {
-      renderer?.updateState(state.players, state.bullets, state.tick);
+      renderer?.updateState(state.players, state.bullets, state.hits ?? [], state.tick);
     });
 
     const onDebugKeyDown = (event: KeyboardEvent) => {
@@ -71,7 +71,7 @@ export function GameCanvas({ socket, playerId, gameState, shapes, mapSize }: Gam
 
       const initial = gameStateRef.current;
       if (initial) {
-        renderer.updateState(initial.players, initial.bullets, initial.tick);
+        renderer.updateState(initial.players, initial.bullets, initial.hits ?? [], initial.tick);
       }
 
       const loop = (frameTime: number) => {

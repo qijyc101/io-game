@@ -7,7 +7,10 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "paths": {
+      "@io-game/shared": ["../shared/src/index.ts"]
+    }
   },
   "include": ["src"]
 }

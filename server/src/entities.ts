@@ -10,8 +10,12 @@ import {
   getWeapon,
   resolveCircleMovement,
   isCirclePlacementValid,
+  segmentMapBoundsHitT,
+  segmentPlayerHitT,
+  segmentPointAtT,
+  segmentShapesEarliestHitT,
 } from "@io-game/shared";
-import type { Vec2 } from "@io-game/shared";
+import type { HitEffect, Vec2 } from "@io-game/shared";
 import { circleOverlapsBulletBlockers, getActiveShapes } from "./collision.js";
 import { getMapHeight, getMapWidth } from "./mapContext.js";
 
@@ -149,27 +153,113 @@ export function tryShoot(player: Player, bullets: Bullet[], now: number): void {
   bullets.push(createBullet(player.id, player.weaponId, bx, by, player.aim));
 }
 
-export function moveBullets(bullets: Bullet[], dt: number, now: number): Bullet[] {
-  return bullets
-    .map((b) => {
-      const weapon = getWeapon(b.weaponId);
-      return {
-        ...b,
-        x: b.x + Math.cos(b.angle) * weapon.bulletSpeed * dt,
-        y: b.y + Math.sin(b.angle) * weapon.bulletSpeed * dt,
-      };
-    })
-    .filter((b) => {
-      const weapon = getWeapon(b.weaponId);
-      const r = weapon.bulletRadius;
-      const mapWidth = getMapWidth();
-      const mapHeight = getMapHeight();
-      const inBounds =
-        b.x >= -r && b.x <= mapWidth + r && b.y >= -r && b.y <= mapHeight + r;
-      const notExpired = now - b.createdAt < weapon.bulletTtlMs;
-      const notInWall = !circleOverlapsBulletBlockers(b.x, b.y, r);
-      return inBounds && notExpired && notInWall;
-    });
+export interface BulletImpact {
+  x: number;
+  y: number;
+  kind: HitEffect["kind"];
+  playerId?: string;
+  ownerId: string;
+  weaponId: string;
+}
+
+function advanceBullet(
+  bullet: Bullet,
+  dt: number,
+  now: number,
+  players: Player[],
+): { bullet: Bullet | null; impact: BulletImpact | null } {
+  const weapon = getWeapon(bullet.weaponId);
+  const x1 = bullet.x;
+  const y1 = bullet.y;
+  const x2 = x1 + Math.cos(bullet.angle) * weapon.bulletSpeed * dt;
+  const y2 = y1 + Math.sin(bullet.angle) * weapon.bulletSpeed * dt;
+  const radius = weapon.bulletRadius;
+  const shapes = getActiveShapes();
+  const mapWidth = getMapWidth();
+  const mapHeight = getMapHeight();
+
+  let bestT: number | null = null;
+  let kind: HitEffect["kind"] = "wall";
+  let playerId: string | undefined;
+
+  const wallT = segmentShapesEarliestHitT(x1, y1, x2, y2, radius, shapes, "bullet");
+  if (wallT !== null) {
+    bestT = wallT;
+  }
+
+  const boundsT = segmentMapBoundsHitT(x1, y1, x2, y2, radius, mapWidth, mapHeight);
+  if (boundsT !== null && (bestT === null || boundsT < bestT)) {
+    bestT = boundsT;
+    kind = "wall";
+    playerId = undefined;
+  }
+
+  for (const player of players) {
+    if (!player.alive || player.id === bullet.ownerId) {
+      continue;
+    }
+    const hitT = segmentPlayerHitT(
+      x1,
+      y1,
+      x2,
+      y2,
+      radius,
+      player.x,
+      player.y,
+      PLAYER_RADIUS,
+    );
+    if (hitT !== null && (bestT === null || hitT < bestT)) {
+      bestT = hitT;
+      kind = "player";
+      playerId = player.id;
+    }
+  }
+
+  if (bestT !== null) {
+    const point = segmentPointAtT(x1, y1, x2, y2, bestT);
+    return {
+      bullet: null,
+      impact: {
+        x: point.x,
+        y: point.y,
+        kind,
+        playerId,
+        ownerId: bullet.ownerId,
+        weaponId: bullet.weaponId,
+      },
+    };
+  }
+
+  if (now - bullet.createdAt >= weapon.bulletTtlMs) {
+    return { bullet: null, impact: null };
+  }
+
+  return {
+    bullet: { ...bullet, x: x2, y: y2 },
+    impact: null,
+  };
+}
+
+export function simulateBullets(
+  bullets: Bullet[],
+  dt: number,
+  now: number,
+  players: Player[],
+): { bullets: Bullet[]; impacts: BulletImpact[] } {
+  const nextBullets: Bullet[] = [];
+  const impacts: BulletImpact[] = [];
+
+  for (const bullet of bullets) {
+    const result = advanceBullet(bullet, dt, now, players);
+    if (result.bullet) {
+      nextBullets.push(result.bullet);
+    }
+    if (result.impact) {
+      impacts.push(result.impact);
+    }
+  }
+
+  return { bullets: nextBullets, impacts };
 }
 
 export function respawnPlayer(player: Player, now: number): void {
