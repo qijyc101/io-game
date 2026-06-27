@@ -1,6 +1,4 @@
 import {
-  MAP_WIDTH,
-  MAP_HEIGHT,
   PLAYER_RADIUS,
   PLAYER_SPEED,
   PLAYER_MAX_HP,
@@ -10,10 +8,12 @@ import {
   SPAWN_ATTEMPTS,
   DEFAULT_WEAPON_ID,
   getWeapon,
-  clampToMap,
+  resolveCircleMovement,
+  isCirclePlacementValid,
 } from "@io-game/shared";
 import type { Vec2 } from "@io-game/shared";
-import { circleOverlapsObstacles } from "./collision.js";
+import { circleOverlapsBulletBlockers, getActiveShapes } from "./collision.js";
+import { getMapHeight, getMapWidth } from "./mapContext.js";
 
 let nextEntityId = 1;
 
@@ -87,21 +87,27 @@ export function createBullet(
 }
 
 export function randomSpawnPosition(): Vec2 {
+  const mapWidth = getMapWidth();
+  const mapHeight = getMapHeight();
+  const shapes = getActiveShapes();
   const margin = PLAYER_RADIUS + SPAWN_MAP_MARGIN;
   for (let attempt = 0; attempt < SPAWN_ATTEMPTS; attempt++) {
-    const x = margin + Math.random() * (MAP_WIDTH - margin * 2);
-    const y = margin + Math.random() * (MAP_HEIGHT - margin * 2);
-    if (!circleOverlapsObstacles(x, y, PLAYER_RADIUS + SPAWN_OBSTACLE_CLEARANCE)) {
+    const x = margin + Math.random() * (mapWidth - margin * 2);
+    const y = margin + Math.random() * (mapHeight - margin * 2);
+    if (
+      isCirclePlacementValid(
+        x,
+        y,
+        PLAYER_RADIUS + SPAWN_OBSTACLE_CLEARANCE,
+        shapes,
+        mapWidth,
+        mapHeight,
+      )
+    ) {
       return { x, y };
     }
   }
-  return { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 };
-}
-
-function canPlaceCircle(x: number, y: number, radius: number): boolean {
-  const clamped = clampToMap(x, y, radius);
-  if (clamped.x !== x || clamped.y !== y) return false;
-  return !circleOverlapsObstacles(x, y, radius);
+  return { x: mapWidth / 2, y: mapHeight / 2 };
 }
 
 export function movePlayer(player: Player, dt: number): void {
@@ -109,19 +115,20 @@ export function movePlayer(player: Player, dt: number): void {
 
   const len = Math.hypot(player.move.x, player.move.y);
   if (len > 0) {
-    const nx = player.move.x / len;
-    const ny = player.move.y / len;
-    const newX = player.x + nx * PLAYER_SPEED * dt;
-    const newY = player.y + ny * PLAYER_SPEED * dt;
-
-    if (canPlaceCircle(newX, newY, PLAYER_RADIUS)) {
-      player.x = newX;
-      player.y = newY;
-    } else if (canPlaceCircle(newX, player.y, PLAYER_RADIUS)) {
-      player.x = newX;
-    } else if (canPlaceCircle(player.x, newY, PLAYER_RADIUS)) {
-      player.y = newY;
-    }
+    const dx = (player.move.x / len) * PLAYER_SPEED * dt;
+    const dy = (player.move.y / len) * PLAYER_SPEED * dt;
+    const resolved = resolveCircleMovement(
+      player.x,
+      player.y,
+      dx,
+      dy,
+      PLAYER_RADIUS,
+      getActiveShapes(),
+      getMapWidth(),
+      getMapHeight(),
+    );
+    player.x = resolved.x;
+    player.y = resolved.y;
     player.angle = player.aim;
   } else {
     player.angle = player.aim;
@@ -138,7 +145,7 @@ export function tryShoot(player: Player, bullets: Bullet[], now: number): void {
   const offset = PLAYER_RADIUS + weapon.bulletRadius + weapon.muzzleGap;
   const bx = player.x + Math.cos(player.aim) * offset;
   const by = player.y + Math.sin(player.aim) * offset;
-  if (circleOverlapsObstacles(bx, by, weapon.bulletRadius)) return;
+  if (circleOverlapsBulletBlockers(bx, by, weapon.bulletRadius)) return;
   bullets.push(createBullet(player.id, player.weaponId, bx, by, player.aim));
 }
 
@@ -155,10 +162,12 @@ export function moveBullets(bullets: Bullet[], dt: number, now: number): Bullet[
     .filter((b) => {
       const weapon = getWeapon(b.weaponId);
       const r = weapon.bulletRadius;
+      const mapWidth = getMapWidth();
+      const mapHeight = getMapHeight();
       const inBounds =
-        b.x >= -r && b.x <= MAP_WIDTH + r && b.y >= -r && b.y <= MAP_HEIGHT + r;
+        b.x >= -r && b.x <= mapWidth + r && b.y >= -r && b.y <= mapHeight + r;
       const notExpired = now - b.createdAt < weapon.bulletTtlMs;
-      const notInWall = !circleOverlapsObstacles(b.x, b.y, r);
+      const notInWall = !circleOverlapsBulletBlockers(b.x, b.y, r);
       return inBounds && notExpired && notInWall;
     });
 }

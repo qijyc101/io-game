@@ -1,7 +1,7 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import {
-  MAP_WIDTH,
-  MAP_HEIGHT,
+  DEFAULT_MAP_HEIGHT,
+  DEFAULT_MAP_WIDTH,
   PLAYER_RADIUS,
   PLAYER_AIM_LINE_LENGTH,
   VIEWPORT_WIDTH,
@@ -14,12 +14,11 @@ import {
   FOG_OVERLAY_FILL,
   FOG_OVERLAY_EDGE_COLOR,
   FOG_OVERLAY_EDGE_WIDTH,
-  OBSTACLES,
   canSeeTarget,
   getCameraTarget,
   getWeapon,
 } from "@io-game/shared";
-import type { PlayerState, BulletState } from "@io-game/shared";
+import type { MapShape, PlayerState, BulletState } from "@io-game/shared";
 import type { InputState } from "./input";
 import { computeVisibilityPolygon } from "./visibilityPolygon";
 import { interpolatePosition, lerpAngle } from "./interpolation";
@@ -80,13 +79,16 @@ export class GameRenderer {
   private localPredictor = new LocalPredictor();
   private localPlayerId: string | null = null;
   private lastTick = -1;
-  private cameraX = MAP_WIDTH / 2;
-  private cameraY = MAP_HEIGHT / 2;
+  private cameraX = DEFAULT_MAP_WIDTH / 2;
+  private cameraY = DEFAULT_MAP_HEIGHT / 2;
+  private mapWidth = DEFAULT_MAP_WIDTH;
+  private mapHeight = DEFAULT_MAP_HEIGHT;
   private lastInput: InputState = {
     move: { x: 0, y: 0 },
     aim: 0,
     shoot: false,
   };
+  private shapes: MapShape[] = [];
 
   constructor(gameApp: GameApp) {
     this.app = gameApp.app;
@@ -99,7 +101,7 @@ export class GameRenderer {
 
     this.app.stage.addChild(this.worldContainer);
     this.drawArena();
-    this.drawObstacles();
+    this.drawMapShapes();
     this.worldContainer.addChild(this.arenaGraphics);
     this.worldContainer.addChild(this.obstacleGraphics);
     this.worldContainer.addChild(this.entityContainer);
@@ -113,19 +115,44 @@ export class GameRenderer {
     this.lastInput = input;
   }
 
+  setMapShapes(shapes: MapShape[]): void {
+    this.shapes = shapes;
+    this.localPredictor.setMapShapes(shapes);
+    this.drawMapShapes();
+  }
+
+  setMapSize(width: number, height: number): void {
+    this.mapWidth = width;
+    this.mapHeight = height;
+    this.cameraX = width / 2;
+    this.cameraY = height / 2;
+    this.localPredictor.setMapSize(width, height);
+    this.drawArena();
+  }
+
   private drawArena(): void {
     this.arenaGraphics.clear();
-    this.arenaGraphics.rect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+    this.arenaGraphics.rect(0, 0, this.mapWidth, this.mapHeight);
     this.arenaGraphics.fill(0x1e293b);
     this.arenaGraphics.stroke({ width: 4, color: 0x475569 });
   }
 
-  private drawObstacles(): void {
+  private drawMapShapes(): void {
     this.obstacleGraphics.clear();
-    for (const o of OBSTACLES) {
-      this.obstacleGraphics.rect(o.x, o.y, o.width, o.height);
-      this.obstacleGraphics.fill(0x334155);
-      this.obstacleGraphics.stroke({ width: 2, color: 0x64748b });
+    for (const shape of this.shapes) {
+      if (shape.kind === "rect") {
+        this.obstacleGraphics.rect(shape.x, shape.y, shape.width, shape.height);
+        this.obstacleGraphics.fill(0x334155);
+        this.obstacleGraphics.stroke({ width: 2, color: 0x64748b });
+      } else if (shape.kind === "circle") {
+        this.obstacleGraphics.circle(shape.x, shape.y, shape.radius);
+        this.obstacleGraphics.fill(0x334155);
+        this.obstacleGraphics.stroke({ width: 2, color: 0x64748b });
+      } else {
+        this.obstacleGraphics.moveTo(shape.x1, shape.y1);
+        this.obstacleGraphics.lineTo(shape.x2, shape.y2);
+        this.obstacleGraphics.stroke({ width: shape.thickness, color: 0x64748b, cap: "round" });
+      }
     }
   }
 
@@ -238,7 +265,7 @@ export class GameRenderer {
     vw: number,
     vh: number,
   ): void {
-    const polygon = computeVisibilityPolygon(originX, originY, aim);
+    const polygon = computeVisibilityPolygon(originX, originY, aim, this.shapes);
     const ctx = this.fogCtx;
     const canvas = this.fogCanvas;
     const dpr = this.app.renderer.resolution;
@@ -364,7 +391,7 @@ export class GameRenderer {
 
       const visible =
         isLocal ||
-        (hasLocal && canSeeTarget(localX, localY, localAim, x, y));
+        (hasLocal && canSeeTarget(localX, localY, localAim, x, y, this.shapes));
 
       let g = this.playerGraphics.get(id);
       if (!g) {
@@ -429,7 +456,7 @@ export class GameRenderer {
       const isOwn = data.ownerId === this.localPlayerId;
       const visible =
         isOwn ||
-        (hasLocal && canSeeTarget(localX, localY, localAim, pos.x, pos.y));
+        (hasLocal && canSeeTarget(localX, localY, localAim, pos.x, pos.y, this.shapes));
 
       g.visible = visible;
       if (!visible) continue;

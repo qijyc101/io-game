@@ -14,8 +14,11 @@ export const INTERP_MS = TICK_MS
 export const EXTRAP_MS = TICK_MS * 2
 
 // Map
-export const MAP_WIDTH = 1500
-export const MAP_HEIGHT = 1500
+export const ACTIVE_MAP = "default"
+export const DEFAULT_MAP_WIDTH = 1500
+export const DEFAULT_MAP_HEIGHT = 1500
+export const MAP_GRID_SIZE = 25
+export const MAP_SNAP_THRESHOLD = 10
 
 // Player
 export const PLAYER_RADIUS = 20
@@ -48,7 +51,7 @@ export const CAMERA_DEAD_ZONE_HEIGHT = 120
 /** Half-extent for camera scroll; debug rect uses WIDTH/HEIGHT above */
 export const CAMERA_DEAD_ZONE_RUBBER = 10
 export const CAMERA_SMOOTH_DECAY = 0.04
-export const CAMERA_DEBUG_DEAD_ZONE = true
+export const CAMERA_DEBUG_DEAD_ZONE = false
 
 // Spawn
 export const SPAWN_MAP_MARGIN = 50

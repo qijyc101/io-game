@@ -4,3 +4,6 @@ export * from "./types.js";
 export * from "./weapons.js";
 export * from "./obstacles.js";
 export * from "./visibility.js";
+export * from "./mapEditor.js";
+export * from "./mapCollision.js";
+export * from "./movement.js";

@@ -1,8 +1,6 @@
 import { WebSocket } from "ws";
 import {
   TICK_MS,
-  MAP_WIDTH,
-  MAP_HEIGHT,
   RESPAWN_DELAY_MS,
   NICKNAME_MAX_LENGTH,
   LEADERBOARD_SIZE,
@@ -11,11 +9,13 @@ import {
 import type {
   ClientMessage,
   InputMessage,
+  MapShape,
   PlayerState,
   BulletState,
   LeaderboardEntry,
   DiedMessage,
   KilledMessage,
+  MapChangedMessage,
 } from "@io-game/shared";
 import {
   createPlayer,
@@ -27,7 +27,8 @@ import {
   type Player,
   type Bullet,
 } from "./entities.js";
-import { bulletHitsPlayer } from "./collision.js";
+import { bulletHitsPlayer, setActiveShapes } from "./collision.js";
+import { setMapSize } from "./mapContext.js";
 
 interface ClientConnection {
   ws: WebSocket;
@@ -41,6 +42,27 @@ export class GameRoom {
   private clients = new Map<WebSocket, ClientConnection>();
   private tick = 0;
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private shapes: MapShape[];
+  private mapSize: { width: number; height: number };
+
+  constructor(shapes: MapShape[], mapSize: { width: number; height: number }) {
+    this.shapes = shapes;
+    this.mapSize = mapSize;
+    setActiveShapes(shapes);
+    setMapSize(mapSize.width, mapSize.height);
+  }
+
+  setMap(shapes: MapShape[], mapSize: { width: number; height: number }): void {
+    this.shapes = shapes;
+    this.mapSize = mapSize;
+    setActiveShapes(shapes);
+    setMapSize(mapSize.width, mapSize.height);
+    this.broadcastMapChanged();
+  }
+
+  getShapes(): MapShape[] {
+    return this.shapes;
+  }
 
   start(): void {
     if (this.intervalId) return;
@@ -89,7 +111,8 @@ export class GameRoom {
         JSON.stringify({
           type: "welcome",
           id: player.id,
-          mapSize: { width: MAP_WIDTH, height: MAP_HEIGHT },
+          mapSize: this.mapSize,
+          shapes: this.shapes,
         }),
       );
       return;
@@ -97,6 +120,30 @@ export class GameRoom {
 
     if (msg.type === "input" && conn.playerId) {
       this.handleInput(conn.playerId, msg);
+      return;
+    }
+
+    if (msg.type === "debug" && conn.playerId) {
+      this.handleDebug(conn.playerId, msg);
+    }
+  }
+
+  private handleDebug(playerId: string, msg: ClientMessage & { type: "debug" }): void {
+    if (process.env.NODE_ENV === "production") return;
+
+    const player = this.players.get(playerId);
+    if (!player || !player.alive) return;
+
+    if (msg.command === "suicide") {
+      const now = Date.now();
+      this.sendToPlayer(player.id, {
+        type: "died",
+        killerId: null,
+        killerNickname: null,
+        weaponName: null,
+        respawnAt: now + RESPAWN_DELAY_MS,
+      } satisfies DiedMessage);
+      killPlayer(player, now);
     }
   }
 
@@ -221,6 +268,20 @@ export class GameRoom {
       y: b.y,
       angle: b.angle,
     };
+  }
+
+  private broadcastMapChanged(): void {
+    const message = JSON.stringify({
+      type: "mapChanged",
+      mapSize: this.mapSize,
+      shapes: this.shapes,
+    } satisfies MapChangedMessage);
+
+    for (const conn of this.clients.values()) {
+      if (conn.joined && conn.ws.readyState === WebSocket.OPEN) {
+        conn.ws.send(message);
+      }
+    }
   }
 
   private broadcastState(): void {

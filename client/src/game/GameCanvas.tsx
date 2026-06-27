@@ -2,19 +2,30 @@ import { useEffect, useRef } from "react";
 import { createPixiApp, GameRenderer } from "./renderer";
 import { initInput } from "./input";
 import type { GameSocket } from "../network/socket";
-import type { StateMessage } from "@io-game/shared";
 import { MAX_FRAME_DT } from "@io-game/shared";
+import type { MapShape, StateMessage } from "@io-game/shared";
 
 interface GameCanvasProps {
   socket: GameSocket;
   playerId: string;
   gameState: StateMessage | null;
+  shapes: MapShape[];
+  mapSize: { width: number; height: number };
 }
 
-export function GameCanvas({ socket, playerId, gameState }: GameCanvasProps) {
+export function GameCanvas({ socket, playerId, gameState, shapes, mapSize }: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<GameRenderer | null>(null);
   const gameStateRef = useRef(gameState);
   gameStateRef.current = gameState;
+
+  useEffect(() => {
+    rendererRef.current?.setMapShapes(shapes);
+  }, [shapes]);
+
+  useEffect(() => {
+    rendererRef.current?.setMapSize(mapSize.width, mapSize.height);
+  }, [mapSize]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -31,6 +42,17 @@ export function GameCanvas({ socket, playerId, gameState }: GameCanvasProps) {
       renderer?.updateState(state.players, state.bullets, state.tick);
     });
 
+    const onDebugKeyDown = (event: KeyboardEvent) => {
+      if (!import.meta.env.DEV || event.code !== "KeyK" || event.repeat) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      event.preventDefault();
+      socket.sendDebug({ type: "debug", command: "suicide" });
+    };
+
+    window.addEventListener("keydown", onDebugKeyDown);
+
     const init = async () => {
       gameApp = await createPixiApp(container);
       if (destroyed) {
@@ -41,7 +63,10 @@ export function GameCanvas({ socket, playerId, gameState }: GameCanvasProps) {
       }
 
       renderer = new GameRenderer(gameApp);
+      rendererRef.current = renderer;
       renderer.setLocalPlayerId(playerId);
+      renderer.setMapSize(mapSize.width, mapSize.height);
+      renderer.setMapShapes(shapes);
       getInput = initInput(gameApp.app.canvas);
 
       const initial = gameStateRef.current;
@@ -69,8 +94,10 @@ export function GameCanvas({ socket, playerId, gameState }: GameCanvasProps) {
 
     return () => {
       destroyed = true;
+      window.removeEventListener("keydown", onDebugKeyDown);
       unsubscribeState();
       cancelAnimationFrame(rafId);
+      rendererRef.current = null;
       renderer?.destroy();
       gameApp?.destroyLayout();
       gameApp?.app.destroy(true, { children: true });

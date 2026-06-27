@@ -1,6 +1,4 @@
 import {
-  MAP_WIDTH,
-  MAP_HEIGHT,
   CAMERA_DEAD_ZONE_RUBBER,
 } from "./config.js";
 import type { Vec2 } from "./types.js";
@@ -12,10 +10,16 @@ export function normalizeAngle(angle: number): number {
   return a;
 }
 
-export function clampToMap(x: number, y: number, radius: number): Vec2 {
+export function clampToMap(
+  x: number,
+  y: number,
+  radius: number,
+  mapWidth: number,
+  mapHeight: number,
+): Vec2 {
   return {
-    x: Math.max(radius, Math.min(MAP_WIDTH - radius, x)),
-    y: Math.max(radius, Math.min(MAP_HEIGHT - radius, y)),
+    x: Math.max(radius, Math.min(mapWidth - radius, x)),
+    y: Math.max(radius, Math.min(mapHeight - radius, y)),
   };
 }
 

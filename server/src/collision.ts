@@ -1,6 +1,15 @@
-import { PLAYER_RADIUS } from "@io-game/shared";
-import { OBSTACLES } from "@io-game/shared";
-import type { ObstacleDef } from "@io-game/shared";
+import { circleOverlapsShapes, PLAYER_RADIUS } from "@io-game/shared";
+import type { MapShape } from "@io-game/shared";
+
+let activeShapes: MapShape[] = [];
+
+export function setActiveShapes(shapes: MapShape[]): void {
+  activeShapes = shapes;
+}
+
+export function getActiveShapes(): MapShape[] {
+  return activeShapes;
+}
 
 export function circleCollision(
   x1: number,
@@ -27,33 +36,28 @@ export function bulletHitsPlayer(
   return circleCollision(bx, by, bulletRadius, px, py, PLAYER_RADIUS);
 }
 
-export function circleOverlapsRect(
+export function circleOverlapsMapShapes(
   cx: number,
   cy: number,
   radius: number,
-  rx: number,
-  ry: number,
-  rw: number,
-  rh: number,
+  shapes: MapShape[] = activeShapes,
 ): boolean {
-  const closestX = Math.max(rx, Math.min(cx, rx + rw));
-  const closestY = Math.max(ry, Math.min(cy, ry + rh));
-  const dx = cx - closestX;
-  const dy = cy - closestY;
-  return dx * dx + dy * dy < radius * radius;
+  return circleOverlapsShapes(cx, cy, radius, shapes, "physical");
 }
 
-export function circleOverlapsObstacles(
+export function circleOverlapsBulletBlockers(
   cx: number,
   cy: number,
   radius: number,
-  obstacles: ObstacleDef[] = OBSTACLES,
+  shapes: MapShape[] = activeShapes,
 ): boolean {
-  return obstacles.some((o) =>
-    circleOverlapsRect(cx, cy, radius, o.x, o.y, o.width, o.height),
-  );
+  // Lines pass through bullets — see shapeBlocksInteraction in mapCollision.ts
+  return circleOverlapsShapes(cx, cy, radius, shapes, "bullet");
 }
 
 export function bulletHitsObstacle(bx: number, by: number, bulletRadius: number): boolean {
-  return circleOverlapsObstacles(bx, by, bulletRadius);
+  return circleOverlapsBulletBlockers(bx, by, bulletRadius);
 }
+
+/** Player movement and spawn — all shape kinds including lines */
+export const circleOverlapsObstacles = circleOverlapsMapShapes;

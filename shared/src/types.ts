@@ -1,3 +1,5 @@
+import type { MapShape } from "./mapEditor.js";
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -52,13 +54,19 @@ export interface InputMessage {
   shoot: boolean;
 }
 
-export type ClientMessage = JoinMessage | InputMessage;
+export interface DebugMessage {
+  type: "debug";
+  command: "suicide";
+}
+
+export type ClientMessage = JoinMessage | InputMessage | DebugMessage;
 
 // Server -> Client
 export interface WelcomeMessage {
   type: "welcome";
   id: string;
   mapSize: { width: number; height: number };
+  shapes: MapShape[];
 }
 
 export interface StateMessage {
@@ -84,8 +92,15 @@ export interface KilledMessage {
   weaponName: string;
 }
 
+export interface MapChangedMessage {
+  type: "mapChanged";
+  mapSize: { width: number; height: number };
+  shapes: MapShape[];
+}
+
 export type ServerMessage =
   | WelcomeMessage
   | StateMessage
   | DiedMessage
-  | KilledMessage;
+  | KilledMessage
+  | MapChangedMessage;

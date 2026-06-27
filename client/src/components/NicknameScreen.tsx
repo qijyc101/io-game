@@ -1,8 +1,9 @@
 interface NicknameScreenProps {
   onJoin: (nickname: string) => void;
+  onOpenMapEditor: () => void;
 }
 
-export function NicknameScreen({ onJoin }: NicknameScreenProps) {
+export function NicknameScreen({ onJoin, onOpenMapEditor }: NicknameScreenProps) {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
@@ -34,6 +35,13 @@ export function NicknameScreen({ onJoin }: NicknameScreenProps) {
           className="rounded-lg bg-cyan-600 px-4 py-3 font-semibold text-white transition hover:bg-cyan-500"
         >
           Play
+        </button>
+        <button
+          type="button"
+          onClick={onOpenMapEditor}
+          className="rounded-lg border border-slate-600 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-700"
+        >
+          Map editor
         </button>
       </form>
     </div>

@@ -1,10 +1,12 @@
 import type {
   ClientMessage,
+  DebugMessage,
   ServerMessage,
   StateMessage,
   WelcomeMessage,
   DiedMessage,
   KilledMessage,
+  MapChangedMessage,
 } from "@io-game/shared";
 
 export type GameSocketCallbacks = {
@@ -12,6 +14,7 @@ export type GameSocketCallbacks = {
   onState: (msg: StateMessage) => void;
   onDied: (msg: DiedMessage) => void;
   onKilled: (msg: KilledMessage) => void;
+  onMapChanged: (msg: MapChangedMessage) => void;
   onDisconnect: () => void;
 };
 
@@ -57,6 +60,9 @@ export class GameSocket {
         case "killed":
           this.callbacks.onKilled(msg);
           break;
+        case "mapChanged":
+          this.callbacks.onMapChanged(msg);
+          break;
       }
     };
 
@@ -75,6 +81,11 @@ export class GameSocket {
       aim,
       shoot,
     });
+  }
+
+  sendDebug(msg: DebugMessage): void {
+    if (!import.meta.env.DEV) return;
+    this.send(msg);
   }
 
   disconnect(): void {

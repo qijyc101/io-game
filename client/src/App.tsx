@@ -4,9 +4,11 @@ import { GameCanvas } from "./game/GameCanvas";
 import { NicknameScreen } from "./components/NicknameScreen";
 import { HUD } from "./components/HUD";
 import { DeathOverlay } from "./components/DeathOverlay";
-import type { StateMessage } from "@io-game/shared";
+import { MapEditorScreen } from "./components/MapEditorScreen";
+import type { MapShape, StateMessage } from "@io-game/shared";
+import { DEFAULT_MAP_HEIGHT, DEFAULT_MAP_WIDTH } from "@io-game/shared";
 
-type Screen = "nickname" | "game";
+type Screen = "nickname" | "game" | "mapEditor";
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("nickname");
@@ -18,6 +20,8 @@ export default function App() {
     weaponName: string | null;
   } | null>(null);
   const [killFeed, setKillFeed] = useState<string | null>(null);
+  const [shapes, setShapes] = useState<MapShape[]>([]);
+  const [mapSize, setMapSize] = useState({ width: DEFAULT_MAP_WIDTH, height: DEFAULT_MAP_HEIGHT });
   const [, setTick] = useState(0);
 
   const socket = useMemo(
@@ -25,6 +29,8 @@ export default function App() {
       new GameSocket({
         onWelcome: (msg) => {
           setPlayerId(msg.id);
+          setShapes(msg.shapes);
+          setMapSize(msg.mapSize);
           setScreen("game");
         },
         onState: (msg) => {
@@ -40,6 +46,10 @@ export default function App() {
         onKilled: (msg) => {
           setKillFeed(`Killed ${msg.victimNickname} with ${msg.weaponName}!`);
           setTimeout(() => setKillFeed(null), 2000);
+        },
+        onMapChanged: (msg) => {
+          setShapes(msg.shapes);
+          setMapSize(msg.mapSize);
         },
         onDisconnect: () => {
           setScreen("nickname");
@@ -80,13 +90,28 @@ export default function App() {
   }, [localPlayer?.alive, localPlayer?.respawnAt]);
 
   if (screen === "nickname") {
-    return <NicknameScreen onJoin={handleJoin} />;
+    return (
+      <NicknameScreen
+        onJoin={handleJoin}
+        onOpenMapEditor={() => setScreen("mapEditor")}
+      />
+    );
+  }
+
+  if (screen === "mapEditor") {
+    return <MapEditorScreen onBack={() => setScreen("nickname")} />;
   }
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-slate-900">
       {playerId && (
-        <GameCanvas socket={socket} playerId={playerId} gameState={gameState} />
+        <GameCanvas
+          socket={socket}
+          playerId={playerId}
+          gameState={gameState}
+          shapes={shapes}
+          mapSize={mapSize}
+        />
       )}
 
       {localPlayer && (

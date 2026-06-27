@@ -1,17 +1,32 @@
 import {
   PLAYER_RADIUS,
   PLAYER_SPEED,
+  DEFAULT_MAP_HEIGHT,
+  DEFAULT_MAP_WIDTH,
   PREDICTION_SNAP_DISTANCE,
   PREDICTION_BLEND_THRESHOLD,
   PREDICTION_BLEND_FACTOR,
-  clampToMap,
+  resolveCircleMovement,
 } from "@io-game/shared";
+import type { MapShape } from "@io-game/shared";
 
 export class LocalPredictor {
   x = 0;
   y = 0;
   angle = 0;
   private initialized = false;
+  private mapWidth = DEFAULT_MAP_WIDTH;
+  private mapHeight = DEFAULT_MAP_HEIGHT;
+  private shapes: MapShape[] = [];
+
+  setMapSize(width: number, height: number): void {
+    this.mapWidth = width;
+    this.mapHeight = height;
+  }
+
+  setMapShapes(shapes: MapShape[]): void {
+    this.shapes = shapes;
+  }
 
   reset(x: number, y: number, angle: number): void {
     this.x = x;
@@ -33,12 +48,20 @@ export class LocalPredictor {
     const len = Math.hypot(moveX, moveY);
     if (len <= 0) return;
 
-    this.x += (moveX / len) * PLAYER_SPEED * dt;
-    this.y += (moveY / len) * PLAYER_SPEED * dt;
-
-    const clamped = clampToMap(this.x, this.y, PLAYER_RADIUS);
-    this.x = clamped.x;
-    this.y = clamped.y;
+    const dx = (moveX / len) * PLAYER_SPEED * dt;
+    const dy = (moveY / len) * PLAYER_SPEED * dt;
+    const resolved = resolveCircleMovement(
+      this.x,
+      this.y,
+      dx,
+      dy,
+      PLAYER_RADIUS,
+      this.shapes,
+      this.mapWidth,
+      this.mapHeight,
+    );
+    this.x = resolved.x;
+    this.y = resolved.y;
   }
 
   reconcile(serverX: number, serverY: number, serverAngle: number, alive: boolean): void {
